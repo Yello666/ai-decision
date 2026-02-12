@@ -48,4 +48,11 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    # 在受限环境（如沙盒）里读取 `.env` 可能触发 PermissionError，
+    # 这里做一次降级：读不了就只用系统环境变量 + 默认值，保证应用可启动。
+    try:
+        return Settings()
+    except PermissionError:
+        return Settings(_env_file=None)
+    except OSError:
+        return Settings(_env_file=None)

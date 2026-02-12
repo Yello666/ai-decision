@@ -14,8 +14,8 @@ router = APIRouter(prefix="/merchant", tags=["merchant"])
 def get_info(current_merchant: Merchant = Depends(get_current_merchant)):
     return success(MerchantOut.model_validate(current_merchant))
 
-#登录之后获取信息
-@router.post("/set-brand-tone")
+#登录之后设置品牌调性
+@router.post("/brand-tone")
 def set_brand_tone(
     payload: BrandToneUpdate,
     current_merchant: Merchant = Depends(get_current_merchant),
@@ -25,3 +25,13 @@ def set_brand_tone(
     db.commit()
     db.refresh(current_merchant)
     return success(MerchantOut.model_validate(current_merchant))
+
+#接收shopifyAPP前端传入的BrandObject，并存储到数据库当中。
+@router.post("/brand-info")
+def set_brand_info():
+    pass
+
+#更新Brand信息
+@router.put("/brand-info")
+def update_brand_info():
+    pass

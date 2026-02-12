@@ -1,5 +1,5 @@
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class MerchantBase(BaseModel):
@@ -29,10 +29,8 @@ class MerchantUpdate(BaseModel):
 
 
 class MerchantOut(MerchantBase):
+    model_config = ConfigDict(from_attributes=True)
     id: int
-
-    class Config:
-        from_attributes = True
 
 
 class BrandToneUpdate(BaseModel):

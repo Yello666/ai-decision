@@ -1,64 +1,72 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from app.api.deps import get_current_merchant
-from app.core.responses import success
-from app.db.mysql import get_db
-from app.services.hotspot_service import list_hotspots, get_hotspot
-from app.schemas.hotspot import ShopInput
-from app.schemas.hotspot import HotspotEvaluateRequest,HotspotEvaluateResponse,calculate_category_match,calculate_keyword_similarity,generate_analysis
+import os
+
+import requests
+from fastapi import APIRouter, HTTPException
+from typing import List
+
+from app.services.hostpot_service import (
+    analyse_matching_degree,
+    collect_and_format_hostspot
+)
+from app.schemas.hotspot import (
+    HotspotMatchRequest,
+    HotspotMatchResponse,
+    TrendObject,
+)
+
+
+
 router = APIRouter(prefix="/hotspot", tags=["hotspot"])
 
-
-@router.post("/evaluate", response_model=HotspotEvaluateResponse)
-def evaluate_hotspot_adapt(request: HotspotEvaluateRequest):
+@router.post("/match", response_model=HotspotMatchResponse)
+def match_hotspot(request: HotspotMatchRequest):
     """
-    热点适配评估接口
-    - 入参：商家品类、商家关键词、热点标题、热点关键词
-    - 出参：适配分数、结果分析、品类匹配度、关键词相似度
+    热点匹配 V2（结构化输入/输出，含雷达维度与建议）
+    - 入参：TrendObject + BrandObject + options
+    - 出参：score + recommendation + radar + suggestion + reason + risk_warning
     """
     try:
-        # 1. 计算品类匹配度
-        category_match = calculate_category_match(request.merchant_category, request.hotspot_title)
-        # 2. 计算关键词相似度
-        keyword_similarity = calculate_keyword_similarity(request.merchant_keywords, request.hotspot_keywords)
-        # 3. 计算综合适配分数（权重可调整：品类70% + 关键词30%）
-        adapt_score = (category_match * 0.7 + keyword_similarity * 0.3) * 100
-        adapt_score = round(adapt_score, 1)
-        # 4. 生成结果分析
-        analysis = generate_analysis(adapt_score, category_match, keyword_similarity)
-
-        return HotspotEvaluateResponse(
-            adapt_score=adapt_score,
-            analysis=analysis,
-            category_match=category_match,
-            keyword_similarity=keyword_similarity
-        )
+        return analyse_matching_degree.match_hotspot_v2(request)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"评估失败：{str(e)}")
+        raise HTTPException(status_code=500, detail=f"匹配失败：{str(e)}")
 
 
-# 从数据库获取热点信息给商家看
-@router.get("/list")
-def hotspot_list(
-    skip: int = 0,
-    limit: int = 20,
-    current_merchant=Depends(get_current_merchant),
-    db: Session = Depends(get_db),
-):
-    items = list_hotspots(db, current_merchant.shopify_store_id, skip, limit)
-    return success(items)
+# FastAPI接口：返回包含所有字段的JSON数据
+@router.get("/hot-trends", response_model=List[TrendObject], summary="获取含完整字段的热点JSON数据")
+async def get_hot_trends(platforms: str = "youtube,tiktok", max_results: int = 5):
+    try:
+        platform_list = [p.strip() for p in platforms.split(",")]
+        hot_trends = collect_and_format_hostspot.collect_and_format_hot_data(platform_list, max_results) # 每个平台各获取5个
+        return hot_trends
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取热点数据失败：{str(e)}")
 
-# 获取单个热点的详细信息
-@router.get("/{hotspot_id}")
-def hotspot_detail(
-    hotspot_id: int,
-    current_merchant=Depends(get_current_merchant),
-    db: Session = Depends(get_db),
-):
-    item = get_hotspot(db, current_merchant.shopify_store_id, hotspot_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="hotspot_not_found")
-    return success(item)
+
+
+
+
+# # 从数据库获取热点信息给商家看
+# @router.get("/list")
+# def hotspot_list(
+#     skip: int = 0,
+#     limit: int = 20,
+#     current_merchant=Depends(get_current_merchant),
+#     db: Session = Depends(get_db),
+# ):
+#     items = list_hotspots(db, current_merchant.shopify_store_id, skip, limit)
+#     return success(items)
+#
+# # 获取单个热点的详细信息
+# @router.get("/{hotspot_id}")
+# def hotspot_detail(
+#     hotspot_id: int,
+#     current_merchant=Depends(get_current_merchant),
+#     db: Session = Depends(get_db),
+# ):
+#     item = get_hotspot(db, current_merchant.shopify_store_id, hotspot_id)
+#     if not item:
+#         raise HTTPException(status_code=404, detail="hotspot_not_found")
+#     return success(item)
 
 # --------------------------
 # 预留接口：大模型图文生成（阶段2-2）
@@ -79,8 +87,12 @@ async def generate_hotspot_content(hotspot_title: str, adapt_analysis: str, merc
         """
         # 调用大模型API（示例：OpenAI）
         api_key = os.getenv("LLM_API_KEY")
+        api_url = os.getenv("LLM_API_URL")
+        if not api_key or not api_url:
+            raise HTTPException(status_code=400, detail="未配置 LLM_API_KEY / LLM_API_URL，无法生成内容")
+
         response = requests.post(
-            url=os.getenv("LLM_API_URL"),
+            url=api_url,
             headers={"Authorization": f"Bearer {api_key}"},
             json={
                 "model": "gpt-3.5-turbo",
@@ -139,3 +151,31 @@ async def publish_to_shopify(shopify_store: str, access_token: str, content: str
 #
 #     result = await assess_hotspot_match(payload)
 #     return success(result)
+
+
+# @router.post("/evaluate", response_model=HotspotEvaluateResponse)
+# def evaluate_hotspot_adapt(request: HotspotEvaluateRequest):
+#     """
+#     热点适配评估接口
+#     - 入参：商家品类、商家关键词、热点标题、热点关键词
+#     - 出参：适配分数、结果分析、品类匹配度、关键词相似度
+#     """
+#     try:
+#         # 1. 计算品类匹配度
+#         category_match = calculate_category_match(request.merchant_category, request.hotspot_title)
+#         # 2. 计算关键词相似度
+#         keyword_similarity = calculate_keyword_similarity(request.merchant_keywords, request.hotspot_keywords)
+#         # 3. 计算综合适配分数（权重可调整：品类70% + 关键词30%）
+#         adapt_score = (category_match * 0.7 + keyword_similarity * 0.3) * 100
+#         adapt_score = round(adapt_score, 1)
+#         # 4. 生成结果分析
+#         analysis = generate_analysis(adapt_score, category_match, keyword_similarity)
+#
+#         return HotspotEvaluateResponse(
+#             adapt_score=adapt_score,
+#             analysis=analysis,
+#             category_match=category_match,
+#             keyword_similarity=keyword_similarity
+#         )
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"评估失败：{str(e)}")
