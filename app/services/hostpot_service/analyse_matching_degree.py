@@ -2,7 +2,7 @@ import os
 import json
 import re
 import math
-from typing import Optional, Iterable, Tuple, List
+from typing import Optional, Iterable, Any, Dict, List
 
 import httpx
 import jieba
@@ -33,10 +33,54 @@ LLM_CLIENT = OpenAI(
     base_url=os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
     api_key=os.getenv("LLM_API_KEY", "sk-b0fc3528ced64aa4b31eca19eb10fb39"),
 )
-LLM_MODEL="qwen-plus"
-
+LLM_MODEL="qwen3.5-plus"
 
 # 核心热点匹配度计算函数
+def batch_match_hotspot_v2(requests: List[HotspotMatchRequest]) -> List[HotspotMatchResponse]:
+    """
+    批量热点匹配计算
+    - 支持分批处理，每批最多 10 个
+    """
+    all_responses: list[HotspotMatchResponse] = []
+    BATCH_SIZE = 10
+    
+    for i in range(0, len(requests), BATCH_SIZE):
+        batch = requests[i:i + BATCH_SIZE]
+        
+        # 区分需要使用 LLM 的和不需要的
+        llm_batch = []
+        rule_batch_indices = []
+        
+        for idx, req in enumerate(batch):
+            opt = req.options or HotspotMatchOptions()
+            if opt.use_llm:
+                llm_batch.append(req)
+            else:
+                rule_batch_indices.append(idx)
+        
+        # 处理不需要 LLM 的（离线规则）
+        batch_responses = [None] * len(batch)
+        for idx in rule_batch_indices:
+            req = batch[idx]
+            batch_responses[idx] = _match_with_rules(req.trend, req.brand, req.options or HotspotMatchOptions())
+            
+        # 批量处理需要 LLM 的
+        if llm_batch:
+            llm_results = _batch_match_with_llm(llm_batch)
+            # 将 LLM 结果填回 batch_responses
+            llm_idx = 0
+            for idx in range(len(batch)):
+                if batch_responses[idx] is None:
+                    batch_responses[idx] = llm_results[llm_idx]
+                    llm_idx += 1
+                    
+        all_responses.extend(batch_responses)
+        
+    return all_responses
+
+
+
+# 处理单组数据的业务函数
 def match_hotspot_v2(request: HotspotMatchRequest) -> HotspotMatchResponse:
     trend = request.trend
     brand = request.brand
@@ -48,8 +92,102 @@ def match_hotspot_v2(request: HotspotMatchRequest) -> HotspotMatchResponse:
 
     # 离线识别
     return _match_with_rules(trend, brand, opt)
+def _batch_match_with_llm(requests: List[HotspotMatchRequest]) -> List[HotspotMatchResponse]:
+    """
+    批量调用大模型进行匹配度分析
+    """
+    # 构建批量 Prompt
+    items_data = []
+    for idx, req in enumerate(requests):
+        items_data.append({
+            "index": idx,
+            "trend": {
+                "title": req.trend.title,
+                "summary": req.trend.summary,
+                "tags": req.trend.tags,
+                "audience": req.trend.audience
+            },
+            "brand": {
+                "name": req.brand.name,
+                "industry": req.brand.industry,
+                "core_value": req.brand.core_value,
+                "tone": req.brand.tone,
+                "audience": req.brand.audience
+            }
+        })
 
+    prompt = f"""
+你是一个品牌营销专家，点评风格简洁到位。评估以下多个热点与品牌的契合度对，并按指定 JSON 格式输出结果。
 
+你必须逐一评估输入的每一组（trend 和 brand），并严格按以下 JSON 格式输出。不要包含任何额外解释。
+
+Output Format:
+- Strict JSON only.
+- The output must be a JSON object with a "results" key containing a list of objects.
+- Schema for EACH object in "results":
+{{
+  "index": Integer (Matching the input index),
+  "semantic_relevance": Float (0-100),
+  "tone_fit": Float (0-100),
+  "audience_overlap": Float (0-100),
+  "risk_index": Float (0-100),
+  "compatibility_score": Float (0-100),
+  "recommendation": "String (强烈推荐|推荐|值得尝试|谨慎考虑|不建议|强烈不建议)",
+  "suggestion": "String (结合热点的...)",
+  "reason": "String (语义相关性高...)"
+}}
+
+【待评估数据】
+{json.dumps(items_data, ensure_ascii=False)}
+"""
+
+    try:
+        response = LLM_CLIENT.chat.completions.create(
+            model=os.getenv("LLM_MODEL", LLM_MODEL),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            response_format={"type": "json_object"}
+        )
+
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("模型返回内容为空")
+            
+        result_data = json.loads(content)
+        llm_results_list = result_data.get("results", [])
+        # 按照 index 排序确保顺序一致
+        llm_results_list.sort(key=lambda x: x.get("index", 0))
+        
+        responses = []
+        for res in llm_results_list:
+            responses.append(HotspotMatchResponse(
+                compatibility_score=float(res["compatibility_score"]),
+                recommendation=RecommendationLevel.from_str(res["recommendation"]),
+                radar=MatchRadar(
+                    semantic_relevance=float(res["semantic_relevance"]),
+                    tone_fit=float(res["tone_fit"]),
+                    audience_overlap=float(res["audience_overlap"]),
+                    risk_index=float(res["risk_index"]),
+                ),
+                reason=res["reason"],
+                suggestion=res["suggestion"],
+                risk_warning=None,
+            ))
+            
+        # 如果模型返回的数量不对，或者解析失败，降级处理
+        if len(responses) != len(requests):
+            print(f"LLM returned {len(responses)} results for {len(requests)} requests. Falling back to rules.")
+            return [_match_with_rules(req.trend, req.brand, req.options or HotspotMatchOptions()) for req in requests]
+            
+        return responses
+        
+    except Exception as e:
+        print(f"Batch LLM match failed: {e}. Falling back to rule-based.")
+        return [_match_with_rules(req.trend, req.brand, req.options or HotspotMatchOptions()) for req in requests]
+
+# --------------------------
+# Legacy：旧版 一次API只能处理一次请求
+# --------------------------
 def _match_with_llm(trend: TrendObject, brand: BrandObject, opt: HotspotMatchOptions) -> HotspotMatchResponse:
     prompt = f"""
 你是一个品牌营销专家，点评风格简洁到位，评估以下热点与品牌的契合度，并按指定json格式输出结果。
@@ -58,7 +196,6 @@ def _match_with_llm(trend: TrendObject, brand: BrandObject, opt: HotspotMatchOpt
 标题：{trend.title}
 摘要：{trend.summary}
 标签：{', '.join(trend.tags)}
-情感倾向：{trend.sentiment}
 受众：{', '.join(trend.audience) if trend.audience else '未提供'}
 
 【品牌信息】
@@ -68,9 +205,9 @@ def _match_with_llm(trend: TrendObject, brand: BrandObject, opt: HotspotMatchOpt
 品牌调性：{brand.tone}
 目标受众：{', '.join(brand.audience) if brand.audience else '未提供'}
 
-你必须严格按以下 JSON 格式输出，key对应的value值需要你根据上面的实际情况进行填写。严格按照下面提供的格式，不要包含任何额外内容。
+你必须严格按以下 JSON 格式输出，不要包含任何额外解释、前言或后缀，直接输出纯文本的 JSON 字符串。
 其中 "recommendation" 字段必须从以下值中选择：["强烈推荐", "推荐", "值得尝试", "谨慎考虑", "不建议", "强烈不建议"]。
-
+JSON 格式示例：
 {{
   "semantic_relevance": 85.0,
   "tone_fit": 90.0,
@@ -78,8 +215,8 @@ def _match_with_llm(trend: TrendObject, brand: BrandObject, opt: HotspotMatchOpt
   "risk_index": 10.0,
   "compatibility_score": 84.5,
   "recommendation": "强烈推荐",
-  "suggestion": "结合热点的「多巴胺穿搭」元素...",
-  "reason": "语义相关性高，调性一致，受众高度重合..."
+  "suggestion": "结合热点的...",
+  "reason": "语义相关性高，受众高度重合..."
 }}
 """
 
@@ -89,14 +226,31 @@ def _match_with_llm(trend: TrendObject, brand: BrandObject, opt: HotspotMatchOpt
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,  # 确保输出稳定
             max_tokens=500,
+            response_format={"type": "json_object"}, #强制开启json模式，会屏蔽掉所有非json字符
         )
-        content = response.choices[0].message.content.strip()
-        # 提取 JSON（有些模型会加 ```json...```）
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:].strip()
-        result = json.loads(content)
+
+        if hasattr(response, 'usage') and response.usage:
+            usage = response.usage
+            print("=" * 50)
+            print(f"Token消耗详情（{LLM_MODEL}）：")
+            print(f"输入Token（Prompt）：{usage.prompt_tokens}")
+            print(f"输出Token（Completion）：{usage.completion_tokens}")
+            print(f"总消耗Token：{usage.total_tokens}")
+            print("=" * 50)
+        else:
+            print("⚠️  未获取到Token使用信息，可能是API版本或模型不支持")
+
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("模型返回内容为空")
+        # 使用稳健的解析函数
+        result = parse_llm_json(content)
+
+        # 后续校验关键字段是否存在（防止模型少写字段）
+        required_keys = ["compatibility_score", "recommendation", "suggestion", "reason"]
+        for key in required_keys:
+            if key not in result:
+                raise KeyError(f"缺少必要字段: {key}")
 
         return HotspotMatchResponse(
             compatibility_score=float(result["compatibility_score"]),
@@ -107,14 +261,46 @@ def _match_with_llm(trend: TrendObject, brand: BrandObject, opt: HotspotMatchOpt
                 audience_overlap=float(result["audience_overlap"]),
                 risk_index=float(result["risk_index"]),
             ),
-            suggestion=result["suggestion"],
             reason=result["reason"],
+            suggestion=result["suggestion"],
             risk_warning=None,
         )
     except Exception as e:
         # LLM 失败时降级到传统方法（可选）
         print(f"LLM failed, fallback to rule-based: {e}")
         return _match_with_rules(trend, brand, opt)  # 把你原来的逻辑抽成函数
+
+def parse_llm_json(content:str)-> Dict[str, Any]:
+    # 提取 JSON（有些模型会加 ```json...```）
+    text = content.strip()
+
+    # 1. 去除 markdown 代码块标记
+    if text.startswith("```"):
+        # 移除开头的```和可能的json标识
+        text = text.lstrip("`")  # 移除开头所有反引号
+        if text.lower().startswith("json"):  # 处理```json的情况
+            text = text[4:]  # 跳过json这4个字符
+        # 移除结尾的```
+        text = text.rstrip("`")  # 移除结尾所有反引号
+        # 清理空白
+        text = text.strip()
+
+
+    # 2. 防御性提取：找到第一个 { 和最后一个 }
+    start_idx = text.find('{')
+    end_idx = text.rfind('}')
+
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        json_str = text[start_idx: end_idx + 1]
+    else:
+        # 如果连花括号都找不到，直接报错
+        raise ValueError(f"未找到有效的 JSON 结构: {text[:100]}...")
+
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"JSON 解析失败: {e}. 原始内容片段: {json_str[:200]}")
+
 
 
 # --------------------------

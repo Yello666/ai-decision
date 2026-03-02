@@ -26,7 +26,7 @@ def predict(payload: AssessmentRequest = Body(...)):
     # Simulate AI processing logic
     base_score = 70
     
-    # Logic: if brand tone matches sentiment somewhat
+    # Logic: if brand tone matches sentiment_label somewhat
     if payload.hotspot.sentiment == "positive" and "fun" in payload.shop.brand_tone.lower():
         base_score += 15
     elif payload.hotspot.sentiment == "negative" and "professional" in payload.shop.brand_tone.lower():

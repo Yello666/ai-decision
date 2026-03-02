@@ -87,7 +87,7 @@ def run_test():
         "hotspot": {
             "keyword": "Summer Vibes",
             "trend": "rising",
-            "sentiment": "positive",
+            "sentiment_label": "positive",
             "audience": "teens"
         },
         # shop info is optional, will be filled from DB

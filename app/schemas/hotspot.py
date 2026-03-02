@@ -5,13 +5,6 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-import math
-import re
-from typing import Iterable, Tuple
-
-import jieba
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
 
 # --------------------------
@@ -22,29 +15,47 @@ class SentimentCN(str, Enum): #输入的热点情感只有三个维度
     neutral = "中性"
     negative = "负面"
 
+class RiskEnum(str,Enum):
+    red="RED_LINE"
+    yellow="YELLOW_OPPORTUNITY"
+    green="GREEN_SAFE"
+    none="NONE"
+
 #没有id和跳转链接
 # 输入给大模型作判断的热点，尽量精简减少token消耗
 class TrendObject(BaseModel):
     title: str = Field(..., description="热点标题/关键词")
     summary: str = Field(..., min_length=1, description="热点描述/摘要（50-200字建议，但不强制）")
     tags: List[str] = Field(default_factory=list, description="核心标签，如：#美食 #跨界")
-    sentiment: SentimentCN = Field(default=SentimentCN.neutral, description="情感倾向：正面/负面/中性")
-    audience: Optional[List[str]] = Field(default=None, description="热点受众画像（可选）")
-    view_count: int = Field(..., description="播放/浏览量")
+    view_counts: int = Field(..., description="播放/浏览量")
+    likes:int=Field(..., description="点赞数")
     publish_time: str = Field(..., description="发布时间（ISO格式，如：2026-02-12T10:00:00）")
+    # sentiment_label: SentimentCN = Field(default=SentimentCN.neutral, description="情感倾向：正面/负面/中性")
+    # 不需要展示sentiment，只会有中性、积极两种，而且模型本来就可以根据文本分析
+    audience: Optional[List[str]] = Field(default=None, description="热点受众画像（可选）")
+    #需要audience，因为这个比tag要精确很多
 
-# 爬虫输出的热点，展示到前端
+# 获取到的输出的热点，展示到前端（全面的信息）
 class CollectTrendObject(BaseModel):
     id: str = Field(..., description="热点唯一标识ID")
     title: str = Field(..., description="热点标题/关键词")
     summary: str = Field(..., min_length=1, description="热点描述/摘要（50-200字建议，但不强制）")
     tags: List[str] = Field(default_factory=list, description="核心标签，如：#美食 #跨界")
-    sentiment: SentimentCN = Field(default=SentimentCN.neutral, description="情感倾向：正面/负面/中性")
+
+    # 展示给客户，需要展示情感倾向，这可以提升用户体验，体现分析过程的严谨性，
+    sentiment_label: SentimentCN = Field(default=SentimentCN.neutral, description="情感倾向：正面/负面/中性")
+    sentiment_score:float=Field(default=0.0, description="情感倾向程度，-100为极度负面，100为极度正面")
+
     audience: Optional[List[str]] = Field(default=None, description="热点受众画像（可选）")
+
+    risk_category: RiskEnum = Field(default=RiskEnum.none, description="营销风险评估")
+    warning_message: str = Field(default="", description="营销风险建议")
+
     jump_url: str = Field(..., description="跳转链接（视频/文字页面地址）")
     view_count: int = Field(..., description="播放/浏览量")
+    likes: int = Field(..., description="点赞数")
     publish_time: str = Field(..., description="发布时间（ISO格式，如：2026-02-12T10:00:00）")
-    platform: str = Field(..., description="热点搜集平台，如Tiktok")
+    platform: str = Field(..., description="热点搜集平台，如Youtube")
 
 
 class BrandObject(BaseModel):
@@ -52,6 +63,14 @@ class BrandObject(BaseModel):
     core_value: Optional[str] = Field(default=None, description="品牌Slogan/核心价值")
     industry: str = Field(..., description="品牌行业/品类")
     tone: str = Field(..., description="品牌调性（年轻/高端/搞怪/严谨等）")
+    audience: Optional[List[str]] = Field(default=None, description="品牌目标受众（可选）")
+
+
+class BrandUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, description="品牌名称")
+    core_value: Optional[str] = Field(default=None, description="品牌Slogan/核心价值")
+    industry: Optional[str] = Field(default=None, description="品牌行业/品类")
+    tone: Optional[str] = Field(default=None, description="品牌调性（年轻/高端/搞怪/严谨等）")
     audience: Optional[List[str]] = Field(default=None, description="品牌目标受众（可选）")
 
 
@@ -86,15 +105,21 @@ class RecommendationLevel(str, Enum):
         return mapping.get(value, cls.no)
 
 
+class HotspotTrendRequest(BaseModel):
+    """获取热点数据的请求参数结构体"""
+    platforms: List[str] = Field(default=["youtube"], description="需要获取热点的平台列表")
+    max_results: int = Field(default=5, ge=1, le=50, description="每个平台获取的最大结果数")
+
+
 class HotspotMatchOptions(BaseModel):
     """算法选项：默认离线可运行；如配置了 LLM，可打开 use_llm 做精算。"""
 
     use_llm: bool = Field(default=False, description="是否启用大模型精算（需要配置环境变量）")
-    use_embedding_prefilter: bool = Field(default=False, description="是否启用向量粗筛（适合海量热点场景）")
+    # use_embedding_prefilter: bool = Field(default=False, description="是否启用向量粗筛（适合海量热点场景）")
     # 权重（可按业务调整）
-    w_semantic: float = Field(default=0.4, ge=0, le=1)
-    w_tone: float = Field(default=0.3, ge=0, le=1)
-    w_creative: float = Field(default=0.3, ge=0, le=1)
+    w_semantic: float = Field(default=0.4, ge=0, le=1) #语义重合
+    w_tone: float = Field(default=0.3, ge=0, le=1)  #调性匹配
+    w_creative: float = Field(default=0.3, ge=0, le=1)  #创意发挥空间
 
 
 class HotspotMatchRequest(BaseModel):
@@ -107,8 +132,8 @@ class HotspotMatchResponse(BaseModel):
     compatibility_score: float = Field(..., ge=0, le=100, description="契合度得分（0-100）")
     recommendation: RecommendationLevel
     radar: MatchRadar
-    suggestion: str = Field(..., description="营销切入点建议（一句话）")
     reason: str = Field(..., description="简短分析理由")
+    suggestion: str = Field(..., description="营销切入点建议（一句话）")
     risk_warning: Optional[str] = Field(default=None, description="风险提示（如存在公关风险）")
 
 

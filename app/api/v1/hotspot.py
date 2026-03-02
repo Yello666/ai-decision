@@ -4,42 +4,56 @@ import requests
 from fastapi import APIRouter, HTTPException
 from typing import List
 
-from app.services.hostpot_service import (
-    analyse_matching_degree,
-    collect_and_format_hostspot
-)
 from app.schemas.hotspot import (
     HotspotMatchRequest,
     HotspotMatchResponse,
-    TrendObject,
+    CollectTrendObject,
+    HotspotTrendRequest,
 )
-
-
+from app.services.hostpot_service.analyse_matching_degree import match_hotspot_v2, batch_match_hotspot_v2
+from app.services.hostpot_service.collect_hostspot import collect_and_format_hot_data
 
 router = APIRouter(prefix="/hotspot", tags=["hotspot"])
 
-@router.post("/match", response_model=HotspotMatchResponse)
-def match_hotspot(request: HotspotMatchRequest):
-    """
-    热点匹配 V2（结构化输入/输出，含雷达维度与建议）
-    - 入参：TrendObject + BrandObject + options
-    - 出参：score + recommendation + radar + suggestion + reason + risk_warning
-    """
-    try:
-        return analyse_matching_degree.match_hotspot_v2(request)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"匹配失败：{str(e)}")
-
-
+#1.获取热点数据，展示在前端
 # FastAPI接口：返回包含所有字段的JSON数据
-@router.get("/hot-trends", response_model=List[TrendObject], summary="获取含完整字段的热点JSON数据")
-async def get_hot_trends(platforms: str = "youtube,tiktok", max_results: int = 5):
+@router.post("/hot-trends", response_model=List[CollectTrendObject], summary="获取含完整字段的热点JSON数据")
+async def get_hot_trends(request: HotspotTrendRequest):
+    """
+    获取热点趋势数据
+    - platforms: 平台列表，如 ["youtube"]
+    - max_results: 每个平台获取的结果数量
+    """
     try:
-        platform_list = [p.strip() for p in platforms.split(",")]
-        hot_trends = collect_and_format_hostspot.collect_and_format_hot_data(platform_list, max_results) # 每个平台各获取5个
+        # 如果没有传入平台，默认使用 youtube
+        platforms = request.platforms if request.platforms else ["youtube"]
+        
+        # 批量获取数据
+        hot_trends: List[CollectTrendObject] = []
+        for platform in platforms:
+            trends = collect_and_format_hot_data(platform, request.max_results)
+            hot_trends.extend(trends)
+            
         return hot_trends
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取热点数据失败：{str(e)}")
+        msg = str(e).replace('\n', ' ').replace('\\n', ' ').strip()
+        raise HTTPException(status_code=500, detail=f"获取热点数据失败：{msg}")
+
+
+
+# 2.热点批量匹配
+@router.post("/match", response_model=List[HotspotMatchResponse])
+def match_hotspot(requests: List[HotspotMatchRequest]):
+    """
+    批量热点匹配 V2（结构化输入/输出，支持批量处理）
+    - 入参：List[HotspotMatchRequest]
+    - 出参：List[HotspotMatchResponse]
+    """
+    try:
+        return batch_match_hotspot_v2(requests)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"批量匹配失败：{str(e)}")
+
 
 
 

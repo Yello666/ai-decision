@@ -8,7 +8,7 @@ from app.services.content_service import list_contents, create_content
 
 router = APIRouter(prefix="/content", tags=["content"])
 
-
+# 根据热点建议生成内容（图文/视频）
 @router.post("/generate")
 def generate_content(
     payload: ContentGenerateRequest,
@@ -28,6 +28,7 @@ def generate_content(
     return success(content)
 
 
+# 查看生成的内容（首次生成后存储于数据库，可再次查看）
 @router.get("/list")
 def content_list(
     skip: int = 0,

@@ -3,9 +3,10 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_merchant
 from app.core.responses import success
 from app.db.mysql import get_db
-from app.schemas.hotspot import BrandObject
+from app.schemas.hotspot import BrandObject, BrandUpdate
 from app.schemas.merchant import BrandToneUpdate, MerchantOut
 from app.models import Merchant, Brand
+from app.services.merchant_service import create_or_update_brand
 
 router = APIRouter(prefix="/merchant", tags=["merchant"])
 
@@ -35,33 +36,7 @@ def set_brand_info(
         current_merchant: Merchant = Depends(get_current_merchant),
         db: Session = Depends(get_db)
 ):
-    # 检查是否已存在品牌信息
-    brand = db.query(Brand).filter(Brand.merchant_id == current_merchant.id).first()
-    
-    audience_str = ",".join(brand_object.audience) if brand_object.audience else ""
-    
-    if brand:
-        # 如果存在，则更新
-        brand.name = brand_object.name
-        brand.core_value = brand_object.core_value
-        brand.industry = brand_object.industry
-        brand.tone = brand_object.tone
-        brand.audience = audience_str
-    else:
-        # 如果不存在，则创建
-        brand = Brand(
-            shopify_store_id=current_merchant.shopify_store_id,
-            merchant_id=current_merchant.id,
-            name=brand_object.name,
-            core_value=brand_object.core_value,
-            industry=brand_object.industry,
-            tone=brand_object.tone,
-            audience=audience_str
-        )
-        db.add(brand)
-    
-    db.commit()
-    db.refresh(brand)
+    brand = create_or_update_brand(db, current_merchant, brand_object.model_dump())
     
     # 将 audience 转回 list 返回
     res = BrandObject(
@@ -77,33 +52,13 @@ def set_brand_info(
 #登录之后更新Brand信息
 @router.put("/brand-info")
 def update_brand_info(
-        brand_object: BrandObject,
+        brand_object: BrandUpdate,
         current_merchant: Merchant = Depends(get_current_merchant),
         db: Session = Depends(get_db)
 ):
-    brand = db.query(Brand).filter(Brand.merchant_id == current_merchant.id).first()
-    if not brand:
-        # 如果没有品牌信息，可以选择抛出异常或者直接调用 set_brand_info 的逻辑
-        # 这里选择创建一个新的
-        brand = Brand(
-            shopify_store_id=current_merchant.shopify_store_id,
-            merchant_id=current_merchant.id,
-            name=brand_object.name,
-            core_value=brand_object.core_value,
-            industry=brand_object.industry,
-            tone=brand_object.tone,
-            audience=",".join(brand_object.audience) if brand_object.audience else ""
-        )
-        db.add(brand)
-    else:
-        brand.name = brand_object.name
-        brand.core_value = brand_object.core_value
-        brand.industry = brand_object.industry
-        brand.tone = brand_object.tone
-        brand.audience = ",".join(brand_object.audience) if brand_object.audience else ""
-    
-    db.commit()
-    db.refresh(brand)
+    # 使用 exclude_unset=True 实现部分更新
+    update_data = brand_object.model_dump(exclude_unset=True)
+    brand = create_or_update_brand(db, current_merchant, update_data)
     
     res = BrandObject(
         name=brand.name,
