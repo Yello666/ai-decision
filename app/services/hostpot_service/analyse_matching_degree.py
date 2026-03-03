@@ -30,8 +30,8 @@ settings = get_settings()
 
 # 你可以用任何兼容 OpenAI API 的后端
 LLM_CLIENT = OpenAI(
-    base_url=os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-    api_key=os.getenv("LLM_API_KEY", "sk-b0fc3528ced64aa4b31eca19eb10fb39"),
+    base_url=settings.LLM_API_URL,
+    api_key=settings.LLM_API_KEY
 )
 LLM_MODEL="qwen3.5-plus"
 

@@ -27,9 +27,9 @@ class TrendObject(BaseModel):
     title: str = Field(..., description="热点标题/关键词")
     summary: str = Field(..., min_length=1, description="热点描述/摘要（50-200字建议，但不强制）")
     tags: List[str] = Field(default_factory=list, description="核心标签，如：#美食 #跨界")
-    view_counts: int = Field(..., description="播放/浏览量")
-    likes:int=Field(..., description="点赞数")
-    publish_time: str = Field(..., description="发布时间（ISO格式，如：2026-02-12T10:00:00）")
+    # view_counts: int = Field(..., description="播放/浏览量")
+    # likes:int=Field(..., description="点赞数")
+    # publish_time: str = Field(..., description="发布时间（ISO格式，如：2026-02-12T10:00:00）")
     # sentiment_label: SentimentCN = Field(default=SentimentCN.neutral, description="情感倾向：正面/负面/中性")
     # 不需要展示sentiment，只会有中性、积极两种，而且模型本来就可以根据文本分析
     audience: Optional[List[str]] = Field(default=None, description="热点受众画像（可选）")

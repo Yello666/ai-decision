@@ -1,6 +1,3 @@
-import os
-
-import requests
 from fastapi import APIRouter, HTTPException
 from typing import List
 
@@ -82,43 +79,41 @@ def match_hotspot(requests: List[HotspotMatchRequest]):
 #         raise HTTPException(status_code=404, detail="hotspot_not_found")
 #     return success(item)
 
-# --------------------------
-# 预留接口：大模型图文生成（阶段2-2）
-# --------------------------
-@router.post("/generate-content")
-async def generate_hotspot_content(hotspot_title: str, adapt_analysis: str, merchant_category: str):
-    """
-    对接大模型API生成热点相关图文
-    示例：调用OpenAI API（需替换为你的大模型接口）
-    """
-    try:
-        # 大模型请求参数（可自定义prompt）
-        prompt = f"""
-        基于以下信息为{merchant_category}商家生成热点相关的营销图文：
-        热点标题：{hotspot_title}
-        适配分析：{adapt_analysis}
-        要求：1. 符合商家品类；2. 结合热点关键词；3. 适合Shopify店铺发布；4. 支持商家编辑。
-        """
-        # 调用大模型API（示例：OpenAI）
-        api_key = os.getenv("LLM_API_KEY")
-        api_url = os.getenv("LLM_API_URL")
-        if not api_key or not api_url:
-            raise HTTPException(status_code=400, detail="未配置 LLM_API_KEY / LLM_API_URL，无法生成内容")
-
-        response = requests.post(
-            url=api_url,
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": "gpt-3.5-turbo",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.7
-            }
-        )
-        response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
-        return {"content": content, "editable": True}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"图文生成失败：{str(e)}")
+# 在content处做了
+# @router.post("/generate-content")
+# async def generate_hotspot_content(hotspot_title: str, adapt_analysis: str, merchant_category: str):
+#     """
+#     对接大模型API生成热点相关图文
+#     示例：调用OpenAI API（需替换为你的大模型接口）
+#     """
+#     try:
+#         # 大模型请求参数（可自定义prompt）
+#         prompt = f"""
+#         基于以下信息为{merchant_category}商家生成热点相关的营销图文：
+#         热点标题：{hotspot_title}
+#         适配分析：{adapt_analysis}
+#         要求：1. 符合商家品类；2. 结合热点关键词；3. 适合Shopify店铺发布；4. 支持商家编辑。
+#         """
+#         # 调用大模型API（示例：OpenAI）
+#         api_key = os.getenv("LLM_API_KEY")
+#         api_url = os.getenv("LLM_API_URL")
+#         if not api_key or not api_url:
+#             raise HTTPException(status_code=400, detail="未配置 LLM_API_KEY / LLM_API_URL，无法生成内容")
+#
+#         response = requests.post(
+#             url=api_url,
+#             headers={"Authorization": f"Bearer {api_key}"},
+#             json={
+#                 "model": "gpt-3.5-turbo",
+#                 "messages": [{"role": "user", "content": prompt}],
+#                 "temperature": 0.7
+#             }
+#         )
+#         response.raise_for_status()
+#         content = response.json()["choices"][0]["message"]["content"]
+#         return {"content": content, "editable": True}
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"图文生成失败：{str(e)}")
 
 
 # --------------------------

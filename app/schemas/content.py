@@ -1,14 +1,109 @@
-from typing import Optional
+from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Optional, List, Literal
 from datetime import datetime
 
+from pydantic import BaseModel, Field
 
+from app.schemas.hotspot import TrendObject, BrandObject
+
+
+# --------------------------
+# 通用：结合热点 + 品牌的生成请求基类
+# --------------------------
 class ContentGenerateRequest(BaseModel):
+    """保留兼容：旧版统一生成请求"""
     title: str
     prompt: str
 
 
+# --------------------------
+# 视频生成（SeedDance）
+# --------------------------
+class GenerateVideoRequest(BaseModel):
+    trend: TrendObject = Field(..., description="热点信息，用于生成与热点契合的视频描述")
+    brand: Optional[BrandObject] = Field(default=None, description="品牌信息；不传则使用当前商户已保存的品牌")
+    user_prompt: Optional[str] = Field(default=None, description="用户补充描述，会与模板组合成最终 prompt")
+    model: str = Field(default="doubao-seedance-1-5-pro", description="SeedDance 模型 ID")
+    generation_type: Literal["text_to_video", "image_to_video"] = "text_to_video"
+    image_url: Optional[str] = Field(default=None, description="参考图 URL，仅 image_to_video 时需要")
+    aspect_ratio: str = Field(default="16:9", description="画面比例")
+    duration: float = Field(default=5, ge=1, le=10, description="视频时长（秒）")
+    resolution: str = Field(default="720p", description="输出分辨率")
+
+
+class GenerateVideoResponse(BaseModel):
+    generation_id: int = Field(..., description="本系统生成任务 ID，用于轮询")
+    external_id: Optional[str] = Field(default=None, description="SeedDance video_id")
+    status: str = Field(..., description="pending | processing")
+    message: str = Field(default="任务已提交，请轮询 GET /content/generations/{generation_id} 获取结果")
+
+
+# --------------------------
+# 图片生成（SeedDance Nano Banana）
+# --------------------------
+class GenerateImageRequest(BaseModel):
+    trend: TrendObject = Field(..., description="热点信息")
+    brand: Optional[BrandObject] = Field(default=None, description="品牌信息；不传则使用当前商户已保存的品牌")
+    user_prompt: Optional[str] = Field(default=None, description="用户补充描述")
+    model: str = Field(default="seedream-4.5", description="图片模型 ID，须与 SeedDance 上游一致；可用 SEEDANCE_IMAGE_MODEL 配置默认值")
+    resolution: Literal["1k", "2k", "4k"] = "2k"
+    aspect_ratio: str = Field(default="1:1", description="画面比例")
+    output_format: Literal["png", "jpg", "webp"] = "png"
+    reference_image_urls: Optional[List[str]] = Field(default=None, description="参考图 URL 列表（编辑模式）")
+
+
+class GenerateImageResponse(BaseModel):
+    generation_id: int = Field(..., description="本系统生成任务 ID")
+    external_id: Optional[str] = Field(default=None, description="第三方任务 ID（若有）")
+    status: str = Field(..., description="pending | processing | completed")
+    result_url: Optional[str] = Field(default=None, description="完成后图片 URL")
+    message: str = Field(default="任务已提交，请轮询 GET /content/generations/{generation_id} 获取结果")
+
+
+# --------------------------
+# 文字生成（大模型）
+# --------------------------
+class GenerateTextRequest(BaseModel):
+    trend: TrendObject = Field(..., description="热点信息")
+    brand: Optional[BrandObject] = Field(default=None, description="品牌信息；不传则使用当前商户已保存的品牌")
+    user_prompt: Optional[str] = Field(default=None, description="用户补充要求，如字数、风格")
+    title: Optional[str] = Field(default=None, description="内容标题，用于存储与展示")
+
+
+class GenerateTextResponse(BaseModel):
+    generation_id: int = Field(..., description="本系统生成任务 ID（对应 generations 表）")
+    content_id: Optional[int] = Field(default=None, description="文字内容 ID（contents 表，便于后续编辑）")
+    status: str = Field(..., description="completed（文字生成一般为同步）")
+    result_text: str = Field(..., description="生成的文案")
+    message: str = Field(default="success")
+
+
+# --------------------------
+# 轮询/详情：统一生成任务
+# --------------------------
+class GenerationOut(BaseModel):
+    id: int
+    shopify_store_id: str
+    type: str  # video | image | text
+    status: str
+    prompt_used: Optional[str] = None
+    trend_snapshot: Optional[dict] = None
+    brand_snapshot: Optional[dict] = None
+    external_id: Optional[str] = None
+    result_url: Optional[str] = None
+    result_text: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# --------------------------
+# 列表
+# --------------------------
 class ContentOut(BaseModel):
     id: int
     shopify_store_id: str

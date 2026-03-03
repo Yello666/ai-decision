@@ -36,7 +36,18 @@ class Settings(BaseSettings):
     SHOPIFY_REDIRECT_URI: Optional[str] = "http://localhost:8000/api/v1/auth/shopify/callback"
 
     AUTODL_SERVICE_URL: str = "http://localhost:8001/predict"
-    
+
+    # SeedDance 2.0（字节跳动视频/图片生成）
+    SEEDANCE_API_KEY: Optional[str] = "sk-sd_NEUL_FQXdIAmEmhD-yf8jIJdnHYZZtBqjpOeyCyE" # 从 .env 或环境变量读取，如 sk-sd_xxx
+    SEEDANCE_BASE_URL: str = "https://seedance2.app/api/v1"
+    # 图片生成模型：须与上游支持的 model 一致，否则会报 Invalid image model selected。可覆盖为 seedream-4.5 / seedream-4.0 等
+    SEEDANCE_IMAGE_MODEL: str = "seedream-4.5"
+
+    # 文本生成用大模型（与热点匹配共用）
+    LLM_API_KEY: Optional[str] = "sk-b0fc3528ced64aa4b31eca19eb10fb39"
+    LLM_API_URL: Optional[str] = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    LLM_MODEL:Optional[str]="qwen3.5-plus"
+
     # Test flags
     USE_SQLITE: bool = False
     USE_MOCK_REDIS: bool = False
