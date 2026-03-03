@@ -1,4 +1,7 @@
-CREATE DATABASE shopify_ai;
+CREATE DATABASE IF NOT EXISTS `shopify_ai`;
+
+USE `shopify_ai`;
+SHOW DATABASES LIKE 'shopify%';
 
 CREATE TABLE IF NOT EXISTS merchants (
   id INT AUTO_INCREMENT PRIMARY KEY,
