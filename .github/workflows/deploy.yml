@@ -1,0 +1,62 @@
+name: Deploy FastAPI to Aliyun ECS
+
+on:
+  push:
+    branches: [ "master" ] # 仅在推送到 master 分支时触发
+
+env:
+  # 完整的仓库基础路径
+  ACR_REPO: crpi-t0hvxqzt2j7j9l7n.cn-chengdu.personal.cr.aliyuncs.com/emily1103/shop-ai
+  ACR_REGISTRY: crpi-t0hvxqzt2j7j9l7n.cn-chengdu.personal.cr.aliyuncs.com
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to ACR
+        uses: aliyun/acr-login@v1
+        with:
+          login-server: https://${{ env.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and Push Docker Image
+        run: |
+          # 构建镜像并打上两个标签：SHA 和 latest
+          docker build -t ${{ env.ACR_REPO }}:${{ github.sha }} .
+          docker tag ${{ env.ACR_REPO }}:${{ github.sha }} ${{ env.ACR_REPO }}:latest
+          
+          # 推送这两个标签到阿里云
+          docker push ${{ env.ACR_REPO }}:${{ github.sha }}
+          docker push ${{ env.ACR_REPO }}:latest
+
+  deploy-to-ecs:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH Deploy to ECS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # 登录 ACR（如果 ECS 之前没登录过）
+            docker login --username=${{ secrets.ACR_USERNAME }} --password=${{ secrets.ACR_PASSWORD }} ${{ env.ACR_REGISTRY }}
+            
+            # 停止并移除旧容器（如果存在）
+            docker stop shop-ai || true
+            docker rm shop-ai || true
+            
+            # 拉取新镜像
+            docker pull ${{ env.ACR_REPO }}:latest
+            
+            # 启动新容器
+            docker run -d \
+              --name shop-ai \
+              -p 8000:8000 \
+              --restart always \
+              ${{ env.ACR_REPO }}:latest
