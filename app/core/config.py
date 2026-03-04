@@ -8,18 +8,26 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "AI Decision Platform"
     API_V1_PREFIX: str = "/api/v1"
 
-    MYSQL_HOST: str = "192.168.64.2"
+    # MYSQL_HOST: str = "192.168.64.2"
+    # MYSQL_PORT: int = 3306
+    # MYSQL_USER: str = "root"
+    # MYSQL_PASSWORD: str = "123456"
+    # MYSQL_DB: str = "shopify_ai"
+
+    #云端环境
+    MYSQL_HOST: str = "rm-f8z0gm11946327607.mysql.rds.aliyuncs.com"
     MYSQL_PORT: int = 3306
-    MYSQL_USER: str = "root"
-    MYSQL_PASSWORD: str = "123456"
-    MYSQL_DB: str = "shopify_ai"
+    MYSQL_USER: str = "hupper"
+    MYSQL_PASSWORD: str = "gogogoHupper666!"
+    MYSQL_DB: str = "shop-ai"
+
     MYSQL_POOL_SIZE: int = 10
     MYSQL_MAX_OVERFLOW: int = 20
 
-    REDIS_HOST: str = "192.168.64.2"
+    REDIS_HOST: str = "r-f8zttkqlhth25qkxej.redis.rds.aliyuncs.com:6379"
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
-    REDIS_PASSWORD: str ="123456"
+    REDIS_PASSWORD: str ="gogogoHupper888!"
 
     JWT_SECRET_KEY: str = "hupperhupperhupperhupperhupperhupper"
     JWT_REFRESH_SECRET_KEY: str = "hupperrefreshhupperrefreshhupperrefresh"
