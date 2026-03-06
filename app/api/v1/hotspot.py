@@ -14,7 +14,7 @@ router = APIRouter(prefix="/hotspot", tags=["hotspot"])
 
 #1.获取热点数据，展示在前端
 # FastAPI接口：返回包含所有字段的JSON数据
-@router.post("/hot-trends", response_model=List[CollectTrendObject], summary="获取含完整字段的热点JSON数据")
+@router.get("/hot-trends", response_model=List[CollectTrendObject], summary="获取含完整字段的热点JSON数据")
 async def get_hot_trends(request: HotspotTrendRequest):
     """
     获取热点趋势数据
