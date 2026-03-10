@@ -7,6 +7,7 @@ from app.schemas.hotspot import CollectTrendObject, SentimentCN
 API_KEY = "AIzaSyByBXtfrN3NwEJ932l26nnP9Zxv8y5Ibjg"
 REGION_CODE = "US"
 
+#云端不需要代理
 proxies = {
     "http": "http://127.0.0.1:7890",
     "https": "http://127.0.0.1:7890",
@@ -31,7 +32,7 @@ def get_trending_videos(max_result:int) -> List[CollectTrendObject]:
         response = requests.get(
             url,
             params=params,
-            proxies=proxies,
+            # proxies=proxies,如果没有proxy则只需注释掉这一行即可
             timeout=15
         )
         response.raise_for_status()  # 抛出HTTP错误状态码异常
@@ -44,7 +45,6 @@ def get_trending_videos(max_result:int) -> List[CollectTrendObject]:
 
     # 存储封装后的热点数据
     trend_objects = []
-
     print(f"\n--- 当前 {REGION_CODE} 热门视频 ---\n")
 
     for index, item in enumerate(data["items"], 1):
