@@ -4,10 +4,12 @@ from .base import Base
 
 
 class Generation(Base):
+    """内容生成任务表：视频/图片/文字生成及轮询，按店铺隔离。"""
+
     __tablename__ = "generations"
 
     id = Column(Integer, primary_key=True, index=True)
-    shopify_store_id = Column(String(64), index=True, nullable=False)
+    shopify_store_id = Column(String(64), index=True, nullable=False)  # 所属店铺，多租户隔离
 
     type = Column(String(16), nullable=False, index=True)  # video | image | text
     status = Column(String(32), nullable=False, default="pending", index=True)  # pending | processing | completed | failed

@@ -5,6 +5,7 @@ from .generation_service import (
     create_video_generation,
     create_image_generation,
     create_text_generation,
+    create_deprecated_text_record,
     get_generation_by_id,
     list_generations,
     refresh_video_status,
@@ -18,15 +19,8 @@ __all__ = [
     "create_video_generation",
     "create_image_generation",
     "create_text_generation",
+    "create_deprecated_text_record",
     "get_generation_by_id",
     "list_generations",
     "refresh_video_status",
 ]
-
-
-def list_contents():
-    return None
-
-
-def create_content():
-    return None

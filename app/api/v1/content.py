@@ -7,7 +7,6 @@ from app.db.mysql import get_db
 from app.models import Merchant
 from app.schemas.content import (
     ContentGenerateRequest,
-    ContentOut,
     GenerateVideoRequest,
     GenerateVideoResponse,
     GenerateImageRequest,
@@ -17,12 +16,11 @@ from app.schemas.content import (
     GenerationOut,
 )
 from app.services.content_service import (
-    list_contents,
-    create_content,
     get_brand_for_store,
     create_video_generation,
     create_image_generation,
     create_text_generation,
+    create_deprecated_text_record,
     get_generation_by_id,
     list_generations,
     refresh_video_status,
@@ -132,7 +130,7 @@ def generate_text(
 ):
     """结合热点与品牌生成营销文案。需配置 LLM_API_KEY / LLM_API_URL。"""
     brand = _resolve_brand(payload.brand, current_merchant, db)
-    gen, content_row = create_text_generation(
+    gen = create_text_generation(
         db,
         current_merchant.shopify_store_id,
         payload.trend,
@@ -145,7 +143,6 @@ def generate_text(
     return success(
         GenerateTextResponse(
             generation_id=gen.id,
-            content_id=content_row.id if content_row else None,
             status=gen.status,
             result_text=gen.result_text or "",
             message="success",
@@ -208,14 +205,14 @@ def generate_content(
         f"[Deprecated] 请使用 /content/generate-text 并传入 trend + brand。"
         f"原请求: title={payload.title}, prompt={payload.prompt}"
     )
-    content = create_content(
+    gen = create_deprecated_text_record(
         db,
         current_merchant.shopify_store_id,
         payload.title,
         payload.prompt,
         generated_text,
     )
-    return success(content)
+    return success(GenerationOut.model_validate(gen))
 
 
 # --------------------------
@@ -228,6 +225,6 @@ def content_list(
     current_merchant: Merchant = Depends(get_current_merchant),
     db: Session = Depends(get_db),
 ):
-    """查看已生成的文字内容（contents 表）。"""
-    items = list_contents(db, current_merchant.shopify_store_id, skip, limit)
-    return success(items)
+    """查看已生成的文字内容（来自 generations 表 type=text）。"""
+    items = list_generations(db, current_merchant.shopify_store_id, type_filter="text", skip=skip, limit=limit)
+    return success([GenerationOut.model_validate(g) for g in items])

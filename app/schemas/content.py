@@ -73,7 +73,6 @@ class GenerateTextRequest(BaseModel):
 
 class GenerateTextResponse(BaseModel):
     generation_id: int = Field(..., description="本系统生成任务 ID（对应 generations 表）")
-    content_id: Optional[int] = Field(default=None, description="文字内容 ID（contents 表，便于后续编辑）")
     status: str = Field(..., description="completed（文字生成一般为同步）")
     result_text: str = Field(..., description="生成的文案")
     message: str = Field(default="success")
@@ -101,16 +100,3 @@ class GenerationOut(BaseModel):
         from_attributes = True
 
 
-# --------------------------
-# 列表
-# --------------------------
-class ContentOut(BaseModel):
-    id: int
-    shopify_store_id: str
-    title: str
-    prompt: str
-    generated_text: str
-    created_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True

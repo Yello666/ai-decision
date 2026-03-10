@@ -104,8 +104,8 @@ async def complete_registration(db: Session, state: str, code: str, shop_domain:
         shopify_store_id=shopify_store_id,
         shopify_domain=merchant_in.shopify_domain,
         shopify_category=shopify_category,
-        brand_tone="professional", # Default
-        is_active=True
+        shopify_access_token=access_token,
+        is_active=True,
     )
     
     # Check if exists (email or store_id)

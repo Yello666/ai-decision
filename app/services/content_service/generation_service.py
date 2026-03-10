@@ -9,7 +9,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.models import Content, Generation
+from app.models import Generation
 from app.schemas.hotspot import TrendObject, BrandObject
 from app.services.merchant_service import get_brand_by_merchant_id
 from app.services.content_service.prompt_templates import (
@@ -230,10 +230,9 @@ def create_text_generation(
     *,
     user_prompt: Optional[str] = None,
     title: Optional[str] = None,
-) -> tuple[Generation, Optional[Content]]:
+) -> Generation:
     """
-    同步生成营销文案：调用 LLM，写入 Generation（type=text）并可选写入 Content 表便于编辑。
-    返回 (Generation, Content or None)。
+    同步生成营销文案：调用 LLM，写入 Generation（type=text），结果存 result_text。
     """
     prompt_used = build_text_prompt(trend, brand, user_prompt)
     gen = Generation(
@@ -248,19 +247,10 @@ def create_text_generation(
     db.commit()
     db.refresh(gen)
 
-    content_row: Optional[Content] = None
     try:
         result_text = _call_llm_for_text(prompt_used)
         gen.status = "completed"
         gen.result_text = result_text
-        title_final = title or f"热点文案_{trend.title[:20]}"
-        content_row = Content(
-            shopify_store_id=shopify_store_id,
-            title=title_final,
-            prompt=prompt_used,
-            generated_text=result_text,
-        )
-        db.add(content_row)
     except Exception as e:
         logger.exception("LLM text generation failed")
         gen.status = "failed"
@@ -268,9 +258,7 @@ def create_text_generation(
 
     db.commit()
     db.refresh(gen)
-    if content_row:
-        db.refresh(content_row)
-    return gen, content_row
+    return gen
 
 
 # --------------------------
@@ -295,3 +283,26 @@ def list_generations(
     if type_filter:
         q = q.filter(Generation.type == type_filter)
     return q.order_by(Generation.id.desc()).offset(skip).limit(limit).all()
+
+
+def create_deprecated_text_record(
+    db: Session,
+    shopify_store_id: str,
+    title: str,
+    prompt: str,
+    generated_text: str,
+) -> Generation:
+    """旧版 /content/generate 占位：只写一条 type=text 的 Generation，无热点/品牌快照。"""
+    gen = Generation(
+        shopify_store_id=shopify_store_id,
+        type="text",
+        status="completed",
+        prompt_used=prompt,
+        trend_snapshot=None,
+        brand_snapshot=None,
+        result_text=generated_text,
+    )
+    db.add(gen)
+    db.commit()
+    db.refresh(gen)
+    return gen

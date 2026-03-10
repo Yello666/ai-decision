@@ -556,10 +556,10 @@ def _tokenize_cn(text: str) -> list[str]:
     return [t for t in tokens if len(t) >= 2 or t.isalnum()]
 
 
-def list_hotspots(db: Session, shopify_store_id: str, skip: int = 0, limit: int = 20):
+def list_hotspots(db: Session, skip: int = 0, limit: int = 20):
+    """列出全局热点（所有商家共享），按 id 倒序。"""
     return (
         db.query(Hotspot)
-        .filter(Hotspot.shopify_store_id == shopify_store_id)
         .order_by(Hotspot.id.desc())
         .offset(skip)
         .limit(limit)
@@ -567,13 +567,9 @@ def list_hotspots(db: Session, shopify_store_id: str, skip: int = 0, limit: int 
     )
 
 
-def get_hotspot(db: Session, shopify_store_id: str, hotspot_id: int):
-    return (
-        db.query(Hotspot)
-        .filter(Hotspot.shopify_store_id == shopify_store_id)
-        .filter(Hotspot.id == hotspot_id)
-        .first()
-    )
+def get_hotspot(db: Session, hotspot_id: int):
+    """按 id 获取单条热点。"""
+    return db.query(Hotspot).filter(Hotspot.id == hotspot_id).first()
 
 
 # async def assess_hotspot_match(request: AssessmentRequest) -> AssessmentResponse:

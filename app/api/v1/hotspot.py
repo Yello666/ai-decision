@@ -14,7 +14,8 @@ router = APIRouter(prefix="/hotspot", tags=["hotspot"])
 
 #1.获取热点数据，展示在前端
 # FastAPI接口：返回包含所有字段的JSON数据
-@router.get("/hot-trends", response_model=List[CollectTrendObject], summary="获取含完整字段的热点JSON数据")
+# 明明是Get的语义却使用post：因为fastAPI规定get请求不能含有请求体，而这个请求需要传入请求体
+@router.post("/hot-trends", response_model=List[CollectTrendObject], summary="获取含完整字段的热点JSON数据")
 async def get_hot_trends(request: HotspotTrendRequest):
     """
     获取热点趋势数据
@@ -64,7 +65,7 @@ def match_hotspot(requests: List[HotspotMatchRequest]):
 #     current_merchant=Depends(get_current_merchant),
 #     db: Session = Depends(get_db),
 # ):
-#     items = list_hotspots(db, current_merchant.shopify_store_id, skip, limit)
+#     items = list_hotspots(db, skip, limit)
 #     return success(items)
 #
 # # 获取单个热点的详细信息
@@ -74,7 +75,7 @@ def match_hotspot(requests: List[HotspotMatchRequest]):
 #     current_merchant=Depends(get_current_merchant),
 #     db: Session = Depends(get_db),
 # ):
-#     item = get_hotspot(db, current_merchant.shopify_store_id, hotspot_id)
+#     item = get_hotspot(db, hotspot_id)
 #     if not item:
 #         raise HTTPException(status_code=404, detail="hotspot_not_found")
 #     return success(item)
