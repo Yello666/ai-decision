@@ -63,6 +63,34 @@ def start_video_generation(
     return data.get("data") or {}
 
 
+def upload_reference_image(image_file: Any) -> str:
+    """
+    上传参考图到 SeedDance，返回 hosted URL。
+    用于 image_to_video 模式的 image_url 参数。
+    image_file: 文件对象（有 .read() 方法）或 (filename, fileobj) 元组。
+    """
+    settings = get_settings()
+    key = settings.SEEDANCE_API_KEY or ""
+    if not key:
+        raise ValueError("SEEDANCE_API_KEY 未配置")
+    url = f"{_base_url()}/upload"
+    headers = {"Authorization": f"Bearer {key}"}
+    # multipart/form-data 不设置 Content-Type，让 requests 自动添加 boundary
+    files = {"image": image_file}
+    resp = requests.post(url, headers=headers, files=files, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("error"):
+        err = data["error"]
+        raise RuntimeError(err.get("message", "SeedDance upload failed"))
+    # 兼容多种返回格式：data.url / data.image_url / url / image_url
+    inner = data.get("data") or {}
+    result = inner.get("url") or inner.get("image_url") or data.get("url") or data.get("image_url")
+    if not result or not isinstance(result, str):
+        raise RuntimeError("SeedDance upload 未返回有效 URL")
+    return result
+
+
 def get_video_status(video_id: str) -> dict[str, Any]:
     """
     查询视频生成状态。返回上游 data（含 status, video_url 等）。

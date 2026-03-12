@@ -45,7 +45,10 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
 
     LOG_LEVEL: str = "INFO"
-    ALLOWED_ORIGINS: str = "*"
+
+
+    # 允许的前端域名：在有cookie和Authorization请求头的时候需要具体域名，在这里配置即可。其余时候不会使用这里的域名
+    ALLOWED_ORIGINS: str = "https://restrictions-attributes-relate-planets.trycloudflare.com"
 
     SHOPIFY_API_KEY: Optional[str] = "49455de72dcf6e22f078ee97e94667ef"
     SHOPIFY_API_SECRET: Optional[str] = "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"

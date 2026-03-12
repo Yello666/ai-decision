@@ -200,7 +200,7 @@ def _match_with_llm(trend: TrendObject, brand: BrandObject, opt: HotspotMatchOpt
 
 【品牌信息】
 名称：{brand.name}
-行业：{brand.industry}
+主要售卖产品：{brand.industry}
 核心价值：{brand.core_value or '未提供'}
 品牌调性：{brand.tone}
 目标受众：{', '.join(brand.audience) if brand.audience else '未提供'}
@@ -311,20 +311,6 @@ _CN_WORD_RE = re.compile(r"[\u4e00-\u9fff]+|[A-Za-z0-9]+")
 def _match_with_rules(trend: TrendObject, brand: BrandObject, opt: HotspotMatchOptions) -> HotspotMatchResponse:
     # Step 1: 风险过滤
     risk, risk_warning = _risk_index(trend)  # 默认5
-    if trend.sentiment == SentimentCN.negative:
-        return HotspotMatchResponse(
-            compatibility_score=0.0,
-            recommendation=RecommendationLevel.strong_no,
-            radar=MatchRadar(
-                semantic_relevance=0.0,
-                tone_fit=0.0,
-                audience_overlap=0.0,
-                risk_index=risk,
-            ),
-            suggestion="不建议借势负面热点，优先做品牌安全与舆情隔离。",
-            reason="热点情感倾向为负面，存在显著公关风险。",
-            risk_warning=risk_warning,
-        )
 
     # Step 2: 语义相关性（离线向量：TF-IDF）
     trend_text = f"{trend.title}\n{trend.summary}\n{_safe_join(trend.tags)}"

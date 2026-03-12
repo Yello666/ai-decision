@@ -10,6 +10,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.models import Generation
+from app.schemas.content import ProductObject
 from app.schemas.hotspot import TrendObject, BrandObject
 from app.services.merchant_service import get_brand_by_merchant_id
 from app.services.content_service.prompt_templates import (
@@ -56,6 +57,7 @@ def create_video_generation(
     shopify_store_id: str,
     trend: TrendObject,
     brand: BrandObject,
+    product:ProductObject,
     *,
     user_prompt: Optional[str] = None,
     model: str = "doubao-seedance-1-5-pro",
@@ -69,7 +71,7 @@ def create_video_generation(
     创建视频生成任务：写入 Generation 记录，调用 SeedDance 发起任务，更新 external_id。
     若 SeedDance 调用失败，将 status 置为 failed 并写入 error_message。
     """
-    prompt_used = build_video_prompt(trend, brand, user_prompt)
+    prompt_used = build_video_prompt(trend, brand, product,user_prompt,image_url)
     gen = Generation(
         shopify_store_id=shopify_store_id,
         type="video",

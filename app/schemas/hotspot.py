@@ -114,7 +114,7 @@ class HotspotTrendRequest(BaseModel):
 class HotspotMatchOptions(BaseModel):
     """算法选项：默认离线可运行；如配置了 LLM，可打开 use_llm 做精算。"""
 
-    use_llm: bool = Field(default=False, description="是否启用大模型精算（需要配置环境变量）")
+    use_llm: bool = Field(default=True, description="是否启用大模型精算（需要配置环境变量）")
     # use_embedding_prefilter: bool = Field(default=False, description="是否启用向量粗筛（适合海量热点场景）")
     # 权重（可按业务调整）
     w_semantic: float = Field(default=0.4, ge=0, le=1) #语义重合

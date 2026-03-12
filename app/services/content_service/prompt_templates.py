@@ -2,33 +2,39 @@
 结合热点（TrendObject）与品牌（BrandObject）生成适配大模型/SeedDance 的 Prompt 模板。
 保证生成内容既贴合热点又符合品牌调性。
 """
+from app.schemas.content import ProductObject
 from app.schemas.hotspot import TrendObject, BrandObject
 
 
 def build_video_prompt(
     trend: TrendObject,
     brand: BrandObject,
+    product:ProductObject,
     user_prompt: str | None = None,
+    image_url:str | None=None,
 ) -> str:
     """
     生成视频描述 prompt，用于 SeedDance text-to-video / image-to-video。
-    要求：英文、画面感强、与热点主题和品牌调性一致。
+    要求：视频中的产品要贴合产品图（如果有），有故事性，很好地贴合热点、产品描述和品牌调性。
     """
     tags_str = ", ".join(trend.tags) if trend.tags else "trending"
     audience_brand = ", ".join(brand.audience) if brand.audience else brand.tone
     # audience_trend = ", ".join(trend.audience) if trend.audience else "general audience"
 
     base = (
-        f"Create a short marketing video clip. "
+        f"Create a short marketing video clip base below information . "
         f"Trend context: {trend.title}. {trend.summary}. Tags: {tags_str}. "
         f"Brand: {brand.name}, {brand.industry}, tone: {brand.tone}. "
+        f"Product: {product.name}:{product.description},price:{product.price}."
         f"Target audience: {audience_brand}. "
-        f"Style: cinematic, professional, aligned with the trend and brand. "
+        f"Style: funny, aligned with the trend and brand. "
     )
     if brand.core_value:
         base += f"Brand value: {brand.core_value}. "
     if user_prompt:
         base += f"Additional direction: {user_prompt}. "
+    if image_url:
+        base+="There is a product inference image."
     return base.strip()
 
 

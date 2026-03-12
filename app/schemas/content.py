@@ -20,9 +20,22 @@ class ContentGenerateRequest(BaseModel):
 # --------------------------
 # 视频生成（SeedDance）
 # --------------------------
+
+# 选择用来生成视频的商品
+class ProductObject(BaseModel):
+    name: str
+    description: str
+    price: float
+
+
+
+
+
+
 class GenerateVideoRequest(BaseModel):
     trend: TrendObject = Field(..., description="热点信息，用于生成与热点契合的视频描述")
     brand: Optional[BrandObject] = Field(default=None, description="品牌信息；不传则使用当前商户已保存的品牌")
+    product: ProductObject= Field(default=None, description="单个商品信息；基于这个商品进行视频生成")
     user_prompt: Optional[str] = Field(default=None, description="用户补充描述，会与模板组合成最终 prompt")
     model: str = Field(default="doubao-seedance-1-5-pro", description="SeedDance 模型 ID")
     generation_type: Literal["text_to_video", "image_to_video"] = "text_to_video"

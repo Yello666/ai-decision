@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_merchant
@@ -44,7 +44,39 @@ def _resolve_brand(request_brand, current_merchant: Merchant, db: Session):
 
 
 # --------------------------
-# 视频生成（SeedDance）
+# 参考图上传（用于 image_to_video）
+# --------------------------
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+
+@router.post("/upload-reference-image", response_model=dict)
+def upload_reference_image(
+    image: UploadFile = File(..., description="参考图文件，JPG/PNG/WebP，最大 10MB"),
+    current_merchant: Merchant = Depends(get_current_merchant),
+):
+    """
+    上传参考图到 SeedDance，返回 hosted URL。
+    用于 image_to_video 模式：先调用此接口获取 image_url，再在 generate-video 请求中传入。
+    """
+    if not image.content_type or image.content_type.lower() not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="仅支持图片格式：JPG、PNG、WebP",
+        )
+    try:
+        seedance_client._headers()
+    except ValueError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    try:
+        url = seedance_client.upload_reference_image(image.file)
+        return success({"image_url": url})
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+# --------------------------
+# 视频生成（fake SeedDance）文生视频/图生视频都有，在payload里面设置
+# 如果要上传图片，需要先调用upload-reference-image接口获取image_url
 # --------------------------
 @router.post("/generate-video", response_model=dict)
 def generate_video(
@@ -52,11 +84,16 @@ def generate_video(
     current_merchant: Merchant = Depends(get_current_merchant),
     db: Session = Depends(get_db),
 ):
-    """结合热点与品牌生成视频。需配置 SEEDANCE_API_KEY。"""
+    """结合热点与品牌生成视频。需配置 SEEDANCE_API_KEY。image_to_video 模式需先调用 upload-reference-image 获取 image_url。"""
     try:
         seedance_client._headers()
     except ValueError as e:
         raise HTTPException(status_code=503, detail=str(e))
+    if payload.generation_type == "image_to_video" and not payload.image_url:
+        raise HTTPException(
+            status_code=400,
+            detail="image_to_video 模式必须提供 image_url，请先调用 POST /content/upload-reference-image 上传参考图",
+        )
     brand = _resolve_brand(payload.brand, current_merchant, db)
     gen = create_video_generation(
         db,
@@ -79,6 +116,58 @@ def generate_video(
             message="任务已提交，请轮询 GET /api/v1/content/generations/{generation_id} 获取结果",
         )
     )
+
+#
+# @router.post("/generate-video-with-image", response_model=dict)
+# def generate_video_with_image(
+#     data: str = Form(..., description="JSON 字符串，包含 trend、brand、user_prompt 等，同 generate-video 请求体"),
+#     reference_image: UploadFile = File(..., description="参考图文件，将自动上传并用于 image_to_video"),
+#     current_merchant: Merchant = Depends(get_current_merchant),
+#     db: Session = Depends(get_db),
+# ):
+#     """
+#     一步完成：上传参考图并发起 image_to_video 生成。
+#     使用 multipart/form-data：data（JSON）+ reference_image（文件）。
+#     """
+#     try:
+#         seedance_client._headers()
+#     except ValueError as e:
+#         raise HTTPException(status_code=503, detail=str(e))
+#     if not reference_image.content_type or reference_image.content_type.lower() not in ALLOWED_IMAGE_TYPES:
+#         raise HTTPException(status_code=400, detail="仅支持图片格式：JPG、PNG、WebP")
+#     try:
+#         payload = GenerateVideoRequest.model_validate_json(data)
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=f"data 必须是有效的 JSON：{e}")
+#     try:
+#         image_url = seedance_client.upload_reference_image(reference_image.file)
+#     except RuntimeError as e:
+#         raise HTTPException(status_code=502, detail=str(e))
+#     payload = payload.model_copy(
+#         update={"image_url": image_url, "generation_type": "image_to_video"}
+#     )
+#     brand = _resolve_brand(payload.brand, current_merchant, db)
+#     gen = create_video_generation(
+#         db,
+#         current_merchant.shopify_store_id,
+#         payload.trend,
+#         brand,
+#         user_prompt=payload.user_prompt,
+#         model=payload.model,
+#         generation_type=payload.generation_type,
+#         image_url=payload.image_url,
+#         aspect_ratio=payload.aspect_ratio,
+#         duration=payload.duration,
+#         resolution=payload.resolution,
+#     )
+#     return success(
+#         GenerateVideoResponse(
+#             generation_id=gen.id,
+#             external_id=gen.external_id,
+#             status=gen.status,
+#             message="任务已提交，请轮询 GET /api/v1/content/generations/{generation_id} 获取结果",
+#         )
+#     )
 
 
 # --------------------------
@@ -215,16 +304,16 @@ def generate_content(
     return success(GenerationOut.model_validate(gen))
 
 
-# --------------------------
-# 文字内容列表（原有）
-# --------------------------
-@router.get("/list")
-def content_list(
-    skip: int = 0,
-    limit: int = 20,
-    current_merchant: Merchant = Depends(get_current_merchant),
-    db: Session = Depends(get_db),
-):
-    """查看已生成的文字内容（来自 generations 表 type=text）。"""
-    items = list_generations(db, current_merchant.shopify_store_id, type_filter="text", skip=skip, limit=limit)
-    return success([GenerationOut.model_validate(g) for g in items])
+# # --------------------------
+# # 文字内容列表（原有）
+# # --------------------------
+# @router.get("/list")
+# def content_list(
+#     skip: int = 0,
+#     limit: int = 20,
+#     current_merchant: Merchant = Depends(get_current_merchant),
+#     db: Session = Depends(get_db),
+# ):
+#     """查看已生成的文字内容（来自 generations 表 type=text）。"""
+#     items = list_generations(db, current_merchant.shopify_store_id, type_filter="text", skip=skip, limit=limit)
+#     return success([GenerationOut.model_validate(g) for g in items])

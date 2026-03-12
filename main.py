@@ -55,10 +55,16 @@ app = FastAPI(
 )
 
 # CORS 中间件
+# 注意：当 allow_origins 含 "*" 时，不能使用 allow_credentials=True（CORS 规范不允许），否则浏览器收不到有效 Access-Control-Allow-Origin
+_origins = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
+_credentials = "*" not in _origins
+if _credentials and not _origins:
+    _origins = ["*"]
+    _credentials = False
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",")],
-    allow_credentials=True,
+    allow_origins=_origins,
+    allow_credentials=_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
