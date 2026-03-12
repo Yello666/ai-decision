@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     SHOPIFY_API_KEY: Optional[str] = "49455de72dcf6e22f078ee97e94667ef"
     SHOPIFY_API_SECRET: Optional[str] = "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"
     SHOPIFY_API_VERSION: str = "2026-01"
-    SHOPIFY_REDIRECT_URI: Optional[str] = "http://localhost:8000/api/v1/auth/shopify/callback"
+    SHOPIFY_REDIRECT_URI: Optional[str] = "http://43.106.122.143:8000/api/v1/auth/shopify/callback"
 
     AUTODL_SERVICE_URL: str = "http://localhost:8001/predict"
 
