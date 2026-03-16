@@ -7,6 +7,7 @@ from app.schemas.hotspot import (
     CollectTrendObject
 )
 from app.services.trending_service import get_youtube_trends
+from app.services.trending_service.get_youtube_trends import get_trending_videos_async
 
 # 你可以用任何兼容 OpenAI API 的后端
 LLM_CLIENT = OpenAI(
@@ -15,57 +16,39 @@ LLM_CLIENT = OpenAI(
 )
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen-plus")
 
-BATCH_SIZE=10
+BATCH_SIZE = 10
 
-# 采集+清洗数据（核心业务函数）
-def collect_and_format_hot_data(platforms: str, max_results: int = 5) -> List[CollectTrendObject]:
+
+async def collect_and_format_hot_data_async(platforms: List[str], max_results: int = 5) -> List[CollectTrendObject]:
+    """
+    异步采集+清洗热点数据：按平台拉取并用 LLM 分析，返回 CollectTrendObject 列表。
+    """
     result: List[CollectTrendObject] = []
-    
-    if platforms == "youtube":
-        # 1.获取初始数据
-        youtube_trend_list: List[CollectTrendObject] = get_youtube_trends.get_trending_videos(max_results)
-        
-        # 限制处理数量
+    platform_list = platforms if platforms else ["youtube"]
+    for platform in platform_list:
+        if platform != "youtube":
+            continue
+        youtube_trend_list = await get_trending_videos_async(max_results)
         process_list = youtube_trend_list[:max_results]
-
-        # 2. 分批处理（每批 BATCH_SIZE 个）
         for i in range(0, len(process_list), BATCH_SIZE):
             batch = process_list[i:i + BATCH_SIZE]
-            
-            # 构建批次分析内容
-            analysis_inputs = []
-            for item in batch:
-                input_data = {
-                    "id": item.id,
-                    "title": item.title,
-                    "summary": item.summary,
-                    "tags": item.tags
-                }
-                analysis_inputs.append(input_data)
-            
-            # 3. 调用大模型批量分析
+            analysis_inputs = [
+                {"id": item.id, "title": item.title, "summary": item.summary, "tags": item.tags}
+                for item in batch
+            ]
             batch_results = _analyze_with_llm(analysis_inputs)
-            
             if not batch_results or "results" not in batch_results:
                 print(f"Batch LLM analysis failed or returned empty for batch starting at {i}")
                 continue
-                
-            # 将结果映射回对象
             results_list = batch_results["results"]
-            # 创建 ID 到结果的映射，方便匹配
             res_map = {res["id"]: res for res in results_list if "id" in res}
-            
             for item in batch:
                 analysis_res = res_map.get(item.id)
                 if not analysis_res:
                     continue
-                
-                # 4. 风险过滤：如果标记为 RED_LINE 或 is_safe_for_marketing 为 false，则跳过
                 if analysis_res.get("risk_category") == "RED_LINE" or not analysis_res.get("is_safe_for_marketing"):
                     print(f"Skipping unsafe content: {item.title} (Reason: {analysis_res.get('risk_category')})")
                     continue
-                
-                # 5. 补齐属性
                 item.summary = analysis_res.get("summary", item.summary)
                 item.tags = analysis_res.get("tags", item.tags)
                 item.sentiment_label = _map_sentiment(analysis_res.get("sentiment_label", "中性"))
@@ -73,9 +56,44 @@ def collect_and_format_hot_data(platforms: str, max_results: int = 5) -> List[Co
                 item.risk_category = analysis_res.get("risk_category")
                 item.warning_message = analysis_res.get("warning_message")
                 item.audience = analysis_res.get("audience", [])
-                
                 result.append(item)
+    return result
 
+
+# 采集+清洗数据（同步，保留兼容）
+def collect_and_format_hot_data(platforms: str, max_results: int = 5) -> List[CollectTrendObject]:
+    result: List[CollectTrendObject] = []
+    
+    if platforms == "youtube":
+        youtube_trend_list: List[CollectTrendObject] = get_youtube_trends.get_trending_videos(max_results)
+        process_list = youtube_trend_list[:max_results]
+        for i in range(0, len(process_list), BATCH_SIZE):
+            batch = process_list[i:i + BATCH_SIZE]
+            analysis_inputs = [
+                {"id": item.id, "title": item.title, "summary": item.summary, "tags": item.tags}
+                for item in batch
+            ]
+            batch_results = _analyze_with_llm(analysis_inputs)
+            if not batch_results or "results" not in batch_results:
+                print(f"Batch LLM analysis failed or returned empty for batch starting at {i}")
+                continue
+            results_list = batch_results["results"]
+            res_map = {res["id"]: res for res in results_list if "id" in res}
+            for item in batch:
+                analysis_res = res_map.get(item.id)
+                if not analysis_res:
+                    continue
+                if analysis_res.get("risk_category") == "RED_LINE" or not analysis_res.get("is_safe_for_marketing"):
+                    print(f"Skipping unsafe content: {item.title} (Reason: {analysis_res.get('risk_category')})")
+                    continue
+                item.summary = analysis_res.get("summary", item.summary)
+                item.tags = analysis_res.get("tags", item.tags)
+                item.sentiment_label = _map_sentiment(analysis_res.get("sentiment_label", "中性"))
+                item.sentiment_score = analysis_res.get("sentiment_score", 0.0)
+                item.risk_category = analysis_res.get("risk_category")
+                item.warning_message = analysis_res.get("warning_message")
+                item.audience = analysis_res.get("audience", [])
+                result.append(item)
     return result
 
 

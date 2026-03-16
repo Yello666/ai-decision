@@ -1,13 +1,13 @@
 """
-SeedDance 2.0 API 客户端：视频生成、图片生成、轮询视频状态。
+SeedDance 2.0 API 客户端：视频生成、图片生成、轮询视频状态（异步 httpx）。
 文档：https://seedance2.app/api/v1
 """
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
-import requests
+import httpx
 
 from app.core.config import get_settings
 
@@ -29,7 +29,7 @@ def _base_url() -> str:
     return get_settings().SEEDANCE_BASE_URL.rstrip("/")
 
 
-def start_video_generation(
+async def start_video_generation(
     prompt: str,
     *,
     model: str = "doubao-seedance-1-5-pro",
@@ -54,7 +54,8 @@ def start_video_generation(
     if image_url and generation_type == "image_to_video":
         payload["image_url"] = image_url
 
-    resp = requests.post(url, headers=_headers(), json=payload, timeout=30)
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(url, headers=_headers(), json=payload)
     resp.raise_for_status()
     data = resp.json()
     if data.get("error"):
@@ -63,27 +64,32 @@ def start_video_generation(
     return data.get("data") or {}
 
 
-def upload_reference_image(image_file: Any) -> str:
+async def upload_reference_image(
+    file_content: Union[bytes, Any],
+    filename: str = "image.png",
+) -> str:
     """
     上传参考图到 SeedDance，返回 hosted URL。
     用于 image_to_video 模式的 image_url 参数。
-    image_file: 文件对象（有 .read() 方法）或 (filename, fileobj) 元组。
+    file_content: 文件字节内容，或带 .read() 的文件对象（同步读）。
     """
     settings = get_settings()
     key = settings.SEEDANCE_API_KEY or ""
     if not key:
         raise ValueError("SEEDANCE_API_KEY 未配置")
+    if hasattr(file_content, "read"):
+        file_content = file_content.read()
     url = f"{_base_url()}/upload"
     headers = {"Authorization": f"Bearer {key}"}
-    # multipart/form-data 不设置 Content-Type，让 requests 自动添加 boundary
-    files = {"image": image_file}
-    resp = requests.post(url, headers=headers, files=files, timeout=30)
+    files = {"image": (filename, file_content)}
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(url, headers=headers, files=files)
     resp.raise_for_status()
     data = resp.json()
     if data.get("error"):
         err = data["error"]
         raise RuntimeError(err.get("message", "SeedDance upload failed"))
-    # 兼容多种返回格式：data.url / data.image_url / url / image_url
     inner = data.get("data") or {}
     result = inner.get("url") or inner.get("image_url") or data.get("url") or data.get("image_url")
     if not result or not isinstance(result, str):
@@ -91,12 +97,13 @@ def upload_reference_image(image_file: Any) -> str:
     return result
 
 
-def get_video_status(video_id: str) -> dict[str, Any]:
+async def get_video_status(video_id: str) -> dict[str, Any]:
     """
     查询视频生成状态。返回上游 data（含 status, video_url 等）。
     """
     url = f"{_base_url()}/videos/{video_id}"
-    resp = requests.get(url, headers=_headers(), timeout=15)
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(url, headers=_headers())
     resp.raise_for_status()
     data = resp.json()
     if data.get("error"):
@@ -105,7 +112,7 @@ def get_video_status(video_id: str) -> dict[str, Any]:
     return data.get("data") or {}
 
 
-def start_image_generation(
+async def start_image_generation(
     prompt: str,
     *,
     model: Optional[str] = None,
@@ -116,7 +123,6 @@ def start_image_generation(
 ) -> dict[str, Any]:
     """
     发起图片生成任务。返回上游 data（可能含 task_id 或直接 image_url，以文档为准）。
-    model 未传或为已废弃的 nano-banana-2 时，使用配置 SEEDANCE_IMAGE_MODEL。
     """
     settings = get_settings()
     if model is None or not model.strip() or model.strip() == "nano-banana-2":
@@ -131,7 +137,6 @@ def start_image_generation(
         "aspect_ratio": aspect_ratio,
         "output_format": output_format,
     }
-    # 只传真实 URL：过滤掉占位符如 "string" 或空串
     valid_refs = [
         u for u in (reference_image_urls or [])
         if u and isinstance(u, str) and u.strip().startswith(("http://", "https://"))
@@ -139,7 +144,8 @@ def start_image_generation(
     if valid_refs:
         payload["images"] = valid_refs
 
-    resp = requests.post(url, headers=_headers(), json=payload, timeout=60)
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(url, headers=_headers(), json=payload)
     if not resp.ok:
         err_detail = resp.text
         try:

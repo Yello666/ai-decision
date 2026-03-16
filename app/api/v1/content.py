@@ -50,7 +50,7 @@ ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
 
 @router.post("/upload-reference-image", response_model=dict)
-def upload_reference_image(
+async def upload_reference_image(
     image: UploadFile = File(..., description="参考图文件，JPG/PNG/WebP，最大 10MB"),
     current_merchant: Merchant = Depends(get_current_merchant),
 ):
@@ -68,7 +68,9 @@ def upload_reference_image(
     except ValueError as e:
         raise HTTPException(status_code=503, detail=str(e))
     try:
-        url = seedance_client.upload_reference_image(image.file)
+        content = await image.read()
+        filename = image.filename or "image.png"
+        url = await seedance_client.upload_reference_image(content, filename)
         return success({"image_url": url})
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
@@ -79,7 +81,7 @@ def upload_reference_image(
 # 如果要上传图片，需要先调用upload-reference-image接口获取image_url
 # --------------------------
 @router.post("/generate-video", response_model=dict)
-def generate_video(
+async def generate_video(
     payload: GenerateVideoRequest,
     current_merchant: Merchant = Depends(get_current_merchant),
     db: Session = Depends(get_db),
@@ -95,11 +97,12 @@ def generate_video(
             detail="image_to_video 模式必须提供 image_url，请先调用 POST /content/upload-reference-image 上传参考图",
         )
     brand = _resolve_brand(payload.brand, current_merchant, db)
-    gen = create_video_generation(
+    gen = await create_video_generation(
         db,
         current_merchant.shopify_store_id,
         payload.trend,
         brand,
+        product=payload.product,
         user_prompt=payload.user_prompt,
         model=payload.model,
         generation_type=payload.generation_type,
@@ -174,7 +177,7 @@ def generate_video(
 # 图片生成（还没确认使用哪一个模型，现在是请求不通的）
 # --------------------------
 @router.post("/generate-image", response_model=dict)
-def generate_image(
+async def generate_image(
     payload: GenerateImageRequest,
     current_merchant: Merchant = Depends(get_current_merchant),
     db: Session = Depends(get_db),
@@ -185,7 +188,7 @@ def generate_image(
     except ValueError as e:
         raise HTTPException(status_code=503, detail=str(e))
     brand = _resolve_brand(payload.brand, current_merchant, db)
-    gen = create_image_generation(
+    gen = await create_image_generation(
         db,
         current_merchant.shopify_store_id,
         payload.trend,
@@ -243,7 +246,7 @@ def generate_text(
 # 轮询生成任务状态（视频/图片/文字统一）
 # --------------------------
 @router.get("/generations/{generation_id}", response_model=dict)
-def get_generation(
+async def get_generation(
     generation_id: int,
     current_merchant: Merchant = Depends(get_current_merchant),
     db: Session = Depends(get_db),
@@ -255,7 +258,7 @@ def get_generation(
     if not gen:
         raise HTTPException(status_code=404, detail="generation_not_found")
     if gen.type == "video" and gen.status in ("pending", "processing"):
-        refresh_video_status(db, gen)
+        await refresh_video_status(db, gen)
     return success(GenerationOut.model_validate(gen))
 
 

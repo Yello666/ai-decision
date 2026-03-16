@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "hupperhupperhupperhupperhupperhupper"
     JWT_REFRESH_SECRET_KEY: str = "hupperrefreshhupperrefreshhupperrefresh"
     JWT_ALGORITHM: str = "HS256"
+    # 登录30分钟后会过期
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
 

@@ -50,14 +50,14 @@ def _brand_snapshot(brand: BrandObject) -> dict:
 
 
 # --------------------------
-# 视频生成
+# 视频生成（异步 SeedDance）
 # --------------------------
-def create_video_generation(
+async def create_video_generation(
     db: Session,
     shopify_store_id: str,
     trend: TrendObject,
     brand: BrandObject,
-    product:ProductObject,
+    product: Optional[ProductObject] = None,
     *,
     user_prompt: Optional[str] = None,
     model: str = "doubao-seedance-1-5-pro",
@@ -69,9 +69,8 @@ def create_video_generation(
 ) -> Generation:
     """
     创建视频生成任务：写入 Generation 记录，调用 SeedDance 发起任务，更新 external_id。
-    若 SeedDance 调用失败，将 status 置为 failed 并写入 error_message。
     """
-    prompt_used = build_video_prompt(trend, brand, product,user_prompt,image_url)
+    prompt_used = build_video_prompt(trend, brand, product, user_prompt, image_url)
     gen = Generation(
         shopify_store_id=shopify_store_id,
         type="video",
@@ -85,7 +84,7 @@ def create_video_generation(
     db.refresh(gen)
 
     try:
-        data = seedance_client.start_video_generation(
+        data = await seedance_client.start_video_generation(
             prompt_used,
             model=model,
             generation_type=generation_type,
@@ -111,7 +110,7 @@ def create_video_generation(
     return gen
 
 
-def refresh_video_status(db: Session, gen: Generation) -> None:
+async def refresh_video_status(db: Session, gen: Generation) -> None:
     """
     若 generation 为 video 且 status 为 pending/processing，向 SeedDance 拉取最新状态并更新 DB。
     """
@@ -120,7 +119,7 @@ def refresh_video_status(db: Session, gen: Generation) -> None:
     if gen.status not in ("pending", "processing"):
         return
     try:
-        data = seedance_client.get_video_status(gen.external_id)
+        data = await seedance_client.get_video_status(gen.external_id)
         status = (data.get("status") or "").lower()
         if status == "completed":
             gen.status = "completed"
@@ -138,9 +137,9 @@ def refresh_video_status(db: Session, gen: Generation) -> None:
 
 
 # --------------------------
-# 图片生成
+# 图片生成（异步 SeedDance）
 # --------------------------
-def create_image_generation(
+async def create_image_generation(
     db: Session,
     shopify_store_id: str,
     trend: TrendObject,
@@ -154,8 +153,7 @@ def create_image_generation(
     reference_image_urls: Optional[list[str]] = None,
 ) -> Generation:
     """
-    创建图片生成任务。SeedDance 文档未明确图片是否为异步，此处按同步处理：
-    若返回中含 image_url 则直接 completed；否则保留 pending/processing，后续可扩展轮询。
+    创建图片生成任务。若返回中含 image_url 则直接 completed；否则保留 pending/processing。
     """
     prompt_used = build_image_prompt(trend, brand, user_prompt)
     gen = Generation(
@@ -171,7 +169,7 @@ def create_image_generation(
     db.refresh(gen)
 
     try:
-        data = seedance_client.start_image_generation(
+        data = await seedance_client.start_image_generation(
             prompt_used,
             model=model,
             resolution=resolution,
@@ -184,7 +182,6 @@ def create_image_generation(
             gen.status = "completed"
             gen.result_url = image_url
         else:
-            # 若上游返回 task_id 等，可在此写入 external_id 并保持 processing
             ext_id = data.get("task_id") or data.get("id")
             if ext_id:
                 gen.external_id = str(ext_id)

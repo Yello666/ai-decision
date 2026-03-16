@@ -1,5 +1,6 @@
 from typing import List
 
+import httpx
 import requests
 
 from app.schemas.hotspot import CollectTrendObject, SentimentCN
@@ -13,13 +14,11 @@ proxies = {
     "https": "http://127.0.0.1:7890",
 }
 
-
-def get_trending_videos(max_result:int) -> List[CollectTrendObject]:
+async def get_trending_videos_async(max_result: int) -> List[CollectTrendObject]:
     """
-    获取YouTube热门视频并封装为CollectTrendObject列表
+    异步获取 YouTube 热门视频并封装为 CollectTrendObject 列表。
     """
     url = "https://www.googleapis.com/youtube/v3/videos"
-
     params = {
         "part": "snippet,statistics",
         "chart": "mostPopular",
@@ -27,28 +26,54 @@ def get_trending_videos(max_result:int) -> List[CollectTrendObject]:
         "maxResults": max_result,
         "key": API_KEY,
     }
-
     try:
-        response = requests.get(
-            url,
-            params=params,
-            # proxies=proxies,如果没有proxy则只需注释掉这一行即可
-            timeout=15
-        )
-        response.raise_for_status()  # 抛出HTTP错误状态码异常
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+        data = response.json()
+    except httpx.HTTPError as e:
+        print(f"请求失败: {e}")
+        return []
+    return _parse_youtube_response(data)
+
+# 旧版
+def get_trending_videos(max_result: int) -> List[CollectTrendObject]:
+    """
+    同步获取 YouTube 热门视频并封装为 CollectTrendObject 列表（保留兼容）。
+    """
+    url = "https://www.googleapis.com/youtube/v3/videos"
+    params = {
+        "part": "snippet,statistics",
+        "chart": "mostPopular",
+        "regionCode": REGION_CODE,
+        "maxResults": max_result,
+        "key": API_KEY,
+    }
+    try:
+        response = requests.get(url, params=params, timeout=15)
+        response.raise_for_status()
     except requests.exceptions.RequestException as e:
         print(f"请求失败: {e}")
         return []
-
     print("状态码:", response.status_code)
     data = response.json()
-
-    # 存储封装后的热点数据
-    trend_objects = []
+    trend_objects = _parse_youtube_response(data)
     print(f"\n--- 当前 {REGION_CODE} 热门视频 ---\n")
+    for index, trend_obj in enumerate(trend_objects, 1):
+        print(f"{index}. {trend_obj.title}")
+        print(f"视频ID: {trend_obj.id}")
+        print(f"播放量: {trend_obj.view_count:,}")
+        print(f"点赞数: {trend_obj.likes:,}")
+        print(f"发布时间: {trend_obj.publish_time}")
+        print(f"跳转链接: {trend_obj.jump_url}")
+        print(f"标签: {', '.join(trend_obj.tags)}")
+        print("-" * 80)
+    return trend_objects
 
-    for index, item in enumerate(data["items"], 1):
-        # 提取基础信息
+def _parse_youtube_response(data: dict) -> List[CollectTrendObject]:
+    """从 YouTube API 的 data 解析为 CollectTrendObject 列表。"""
+    trend_objects = []
+    for item in data.get("items", []):
         video_id = item["id"]
         snippet = item["snippet"]
         statistics = item["statistics"]
@@ -77,20 +102,7 @@ def get_trending_videos(max_result:int) -> List[CollectTrendObject]:
             publish_time=snippet["publishedAt"],  # ISO格式时间
             platform="Youtube"
         )
-
         trend_objects.append(trend_obj)
-
-        # 打印格式化信息
-        print(f"{index}. {trend_obj.title}")
-        print(f"视频ID: {trend_obj.id}")
-        print(f"播放量: {trend_obj.view_count:,}")
-        print(f"点赞数: {trend_obj.likes:,}")
-        print(f"发布时间: {trend_obj.publish_time}")
-        print(f"跳转链接: {trend_obj.jump_url}")
-        print(f"标签: {', '.join(trend_obj.tags)}")
-        print("-" * 80)
-
     return trend_objects
-
 
 
