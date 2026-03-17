@@ -49,7 +49,8 @@ class Settings(BaseSettings):
 
 
     # 允许的前端域名：在有cookie和Authorization请求头的时候需要具体域名，在这里配置即可。其余时候不会使用这里的域名
-    ALLOWED_ORIGINS: str = "https://restrictions-attributes-relate-planets.trycloudflare.com"
+    #多个域名使用,分隔
+    ALLOWED_ORIGINS: str = "https://shop-ai.cc,https://www.shop-ai.cc"
 
     SHOPIFY_API_KEY: Optional[str] = "49455de72dcf6e22f078ee97e94667ef"
     SHOPIFY_API_SECRET: Optional[str] = "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"
