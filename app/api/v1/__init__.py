@@ -3,9 +3,11 @@ from .auth import router as auth_router
 from .merchant import router as merchant_router
 from .hotspot import router as hotspot_router
 from .content import router as content_router
+from .pricing_agent import router as pricing_agent_router
 
 router = APIRouter()
 router.include_router(auth_router)
 router.include_router(merchant_router)
 router.include_router(hotspot_router)
 router.include_router(content_router)
+router.include_router(pricing_agent_router)
