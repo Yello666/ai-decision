@@ -20,7 +20,7 @@ joblib==1.5.3
 langchain==0.3.27
 langchain-community==0.3.29
 langchain-openai==0.3.35
-langchain-classic==0.0.16
+langchain-classic
 MarkupSafe==3.0.3
 mdurl==0.1.2
 numpy==2.4.2
