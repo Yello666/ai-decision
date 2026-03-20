@@ -91,6 +91,8 @@ async def generate_video(
         seedance_client._headers()
     except ValueError as e:
         raise HTTPException(status_code=503, detail=str(e))
+    if payload.product.image_url!="":
+        payload.image_url=payload.product.image_url
     if payload.generation_type == "image_to_video" and not payload.image_url:
         raise HTTPException(
             status_code=400,

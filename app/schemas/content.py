@@ -6,6 +6,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.schemas.hotspot import TrendObject, BrandObject
+from app.schemas.product import ProductObject
 
 
 # --------------------------
@@ -15,17 +16,6 @@ class ContentGenerateRequest(BaseModel):
     """保留兼容：旧版统一生成请求"""
     title: str
     prompt: str
-
-
-# --------------------------
-# 视频生成（SeedDance）
-# --------------------------
-
-# 选择用来生成视频的商品
-class ProductObject(BaseModel):
-    name: str
-    description: str
-    price: float
 
 
 

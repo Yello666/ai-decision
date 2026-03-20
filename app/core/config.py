@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "AI Decision Platform"
     API_V1_PREFIX: str = "/api/v1"
 
-    #本地环境
+    # 本地环境
     # MYSQL_HOST: str = "192.168.64.2"
     # MYSQL_PORT: int = 3306
     # MYSQL_USER: str = "root"
@@ -50,13 +50,16 @@ class Settings(BaseSettings):
 
     # 允许的前端域名：在有cookie和Authorization请求头的时候需要具体域名，在这里配置即可。其余时候不会使用这里的域名
     #多个域名使用,分隔
-    ALLOWED_ORIGINS: str = "https://shop-ai.cc,https://www.shop-ai.cc"
+    ALLOWED_ORIGINS: str = "https://shop-ai.cc,https://www.shop-ai.cc,http://127.0.0.1:8000"
 
     # shopifyAPP的client id,自己携带这个就可以被shopifyAPP认为是client，发起请求
     SHOPIFY_API_KEY: Optional[str] = "3e209878da5f4b10514b91b689c955c5"
     SHOPIFY_API_SECRET: Optional[str] = "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"
     SHOPIFY_API_VERSION: str = "2026-01"
     SHOPIFY_REDIRECT_URI: Optional[str] = "https://shop-ai.xin/api/v1/auth/shopify/callback"
+
+    #本地开发
+    # SHOPIFY_REDIRECT_URI: Optional[str] = "http://127.0.0.1:8000/api/v1/auth/shopify/callback"
 
     AUTODL_SERVICE_URL: str = "http://localhost:8001/predict"
 
