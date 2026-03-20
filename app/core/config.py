@@ -52,8 +52,9 @@ class Settings(BaseSettings):
     #多个域名使用,分隔
     ALLOWED_ORIGINS: str = "https://shop-ai.cc,https://www.shop-ai.cc"
 
-    SHOPIFY_API_KEY: Optional[str] = "49455de72dcf6e22f078ee97e94667ef"
-    SHOPIFY_API_SECRET: Optional[str] = "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"
+    # shopifyAPP的client id,自己携带这个就可以被shopifyAPP认为是client，发起请求
+    SHOPIFY_API_KEY: Optional[str] = "3e209878da5f4b10514b91b689c955c5"
+    SHOPIFY_API_SECRET: Optional[str] = "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"
     SHOPIFY_API_VERSION: str = "2026-01"
     SHOPIFY_REDIRECT_URI: Optional[str] = "https://shop-ai.xin/api/v1/auth/shopify/callback"
 

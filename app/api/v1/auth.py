@@ -29,6 +29,7 @@ async def shopify_callback(
     db: Session = Depends(get_db)
 ):
     try:
+        print("callback success")
         merchant = await complete_registration(db, state, code, shop)
         access_token = create_access_token(merchant.shopify_store_id)
         refresh_token = create_refresh_token(merchant.shopify_store_id)
@@ -66,10 +67,10 @@ def login(
     return _generate_tokens(db, form_data.username, form_data.password)
 
 
-@router.post("/login-json", include_in_schema=False)
-def login_json(payload: LoginSchema, db: Session = Depends(get_db)):
-    return _generate_tokens(db, payload.username, payload.password)
-
+# @router.post("/login-json", include_in_schema=False)
+# def login_json(payload: LoginSchema, db: Session = Depends(get_db)):
+#     return _generate_tokens(db, payload.username, payload.password)
+#
 
 @router.post("/refresh")
 def refresh_token(payload: RefreshRequest):
