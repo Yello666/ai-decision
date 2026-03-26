@@ -1,49 +1,42 @@
 from functools import lru_cache
 from typing import Optional
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"  # 忽略 .env 中多余的配置项，防止报错
+    )
+
     PROJECT_NAME: str = "AI Decision Platform"
     API_V1_PREFIX: str = "/api/v1"
 
-    # 本地环境
-    # MYSQL_HOST: str = "192.168.64.2"
-    # MYSQL_PORT: int = 3306
-    # MYSQL_USER: str = "root"
-    # MYSQL_PASSWORD: str = "123456"
-    # MYSQL_DB: str = "shopify_ai"
-
-    #云端环境
-    MYSQL_HOST: str = "rm-t4nxkze6hcj074157.mysql.singapore.rds.aliyuncs.com"
+    # Database
+    MYSQL_HOST: str = "192.168.64.2"
     MYSQL_PORT: int = 3306
-    MYSQL_USER: str = "hupper"
-    MYSQL_PASSWORD: str = "gogogoHupper666!"
+    MYSQL_USER: str = "root"
+    MYSQL_PASSWORD:str="123456"
     MYSQL_DB: str = "shopify_ai"
 
     MYSQL_POOL_SIZE: int = 10
     MYSQL_MAX_OVERFLOW: int = 20
 
-    #本地环境
-    # REDIS_HOST: str = "192.168.64.2"
-    # REDIS_PORT: int = 6379
-    # REDIS_DB: int = 0
-    # REDIS_PASSWORD: str = "123456"
-
-    # 云端环境
-    REDIS_HOST: str = "r-t4noqzbz7kk4xrmee3.redis.singapore.rds.aliyuncs.com"
+    # Redis
+    REDIS_HOST: str = "192.168.64.2"
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
-    REDIS_PASSWORD: str ="gogogoHupper888!"
+    REDIS_PASSWORD:str="123456"
 
-
-    JWT_SECRET_KEY: str = "hupperhupperhupperhupperhupperhupper"
-    JWT_REFRESH_SECRET_KEY: str = "hupperrefreshhupperrefreshhupperrefresh"
+    # JWT
+    JWT_SECRET_KEY: str
+    JWT_REFRESH_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
     # 登录30分钟后会过期
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
+    REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080  # 60 * 24 * 7
 
     LOG_LEVEL: str = "INFO"
 
@@ -52,35 +45,39 @@ class Settings(BaseSettings):
     #多个域名使用,分隔
     ALLOWED_ORIGINS: str = "https://shop-ai.cc,https://www.shop-ai.cc,http://127.0.0.1:8000"
 
-    # shopifyAPP的client id,自己携带这个就可以被shopifyAPP认为是client，发起请求
-    SHOPIFY_API_KEY: Optional[str] = "3e209878da5f4b10514b91b689c955c5"
-    SHOPIFY_API_SECRET: Optional[str] = "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"
+    # ShopifyhopifyAPP的client id,自己携带这个就可以被shopifyAPP认为是client，发起请求
+    SHOPIFY_API_KEY: str
+    SHOPIFY_API_SECRET: str
     SHOPIFY_API_VERSION: str = "2026-01"
-    SHOPIFY_REDIRECT_URI: Optional[str] = "https://shop-ai.xin/api/v1/auth/shopify/callback"
-
-    #本地开发
-    # SHOPIFY_REDIRECT_URI: Optional[str] = "http://127.0.0.1:8000/api/v1/auth/shopify/callback"
+    SHOPIFY_REDIRECT_URI: str = "http://127.0.0.1:8000/api/v1/auth/shopify/callback"
 
     AUTODL_SERVICE_URL: str = "http://localhost:8001/predict"
 
-    # SeedDance 2.0（字节跳动视频/图片生成）
-    SEEDANCE_API_KEY: Optional[str] = "sk-sd_NEUL_FQXdIAmEmhD-yf8jIJdnHYZZtBqjpOeyCyE" # 从 .env 或环境变量读取，如 sk-sd_xxx
+    # SeedDance 2.0
+    SEEDANCE_API_KEY: Optional[str] = None
     SEEDANCE_BASE_URL: str = "https://seedance2.app/api/v1"
-    # 图片生成模型：须与上游支持的 model 一致，否则会报 Invalid image model selected。可覆盖为 seedream-4.5 / seedream-4.0 等
     SEEDANCE_IMAGE_MODEL: str = "seedream-4.5"
 
-    # 文本生成用大模型（与热点匹配共用）
-    LLM_API_KEY: Optional[str] = "sk-b0fc3528ced64aa4b31eca19eb10fb39"
-    LLM_API_URL: Optional[str] = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    LLM_MODEL:Optional[str]="qwen3.5-plus"
+    # LLM (Qwen / DashScope)
+    LLM_API_KEY: Optional[str] = None
+    LLM_API_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    LLM_MODEL: str = "qwen3.5-plus"
+
+    # Agent LLM (Volcengine / Doubao)
+    VOLCENGINE_API_KEY: str
+    AGENT_MODEL_NAME: str = "doubao-seed-1-8-251228"
+    VOLCENGINE_BASE_URL: str = "https://ark.cn-beijing.volces.com/api/v3"
+
+    # Search tools
+    TAVILY_API_KEY: str
+    SERPAPI_API_KEY: Optional[str] = None
+
+    # Competitor cache
+    COMPETITOR_CACHE_TTL: int = 7200
 
     # Test flags
     USE_SQLITE: bool = False
     USE_MOCK_REDIS: bool = False
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
 
 @lru_cache

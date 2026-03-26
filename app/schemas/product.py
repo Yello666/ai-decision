@@ -111,6 +111,7 @@ class GetProductListRequest:
 
 class VariantObject(BaseModel):
     """商品规格信息"""
+    variant_id: int = Field(..., description="Shopify variant ID，唯一标识一个规格")
     name: str = Field(..., description="规格名称，如 S / Red 等")
     price: float = Field(..., description="规格价格（若有折扣则为折后价）")
     image_url: str = Field(default="", description="规格对应的图片 URL")
@@ -118,10 +119,12 @@ class VariantObject(BaseModel):
 
 class ProductObject(BaseModel):
     """商品列表项（精简结构）"""
+    product_id: int = Field(..., description="Shopify product ID，唯一标识一个商品")
     name: str = Field(..., description="商品名称")
     description: str = Field(..., description="商品描述（纯文本，已去除 HTML 标签）")
     price: float = Field(..., description="商品价格（若有折扣则为折后价）")
     image_url: str = Field(default="", description="商品主图 URL")
+    inventory: int = Field(default=0, description="商品总库存数（所有规格库存之和）")
     variants: Optional[List[VariantObject]] = Field(
         default=None,
         description="商品规格列表；仅当商品有多个规格时返回",
@@ -173,17 +176,22 @@ def convert_shopify_product(product: ProductOut) -> ProductObject:
     image_url = _get_primary_image_url(product)
     description = _strip_html(product.body_html)
 
+    inventory = sum(v.inventory_quantity or 0 for v in product.variants)
+
     if len(product.variants) <= 1:
         price = _resolve_variant_price(product.variants[0]) if product.variants else 0.0
         return ProductObject(
+            product_id=product.id,
             name=product.title or "",
             description=description,
             price=price,
             image_url=image_url,
+            inventory=inventory,
         )
 
     variant_objects = [
         VariantObject(
+            variant_id=v.id,
             name=v.title or "",
             price=_resolve_variant_price(v),
             image_url=_find_variant_image_url(v, product, image_url),
@@ -193,9 +201,11 @@ def convert_shopify_product(product: ProductOut) -> ProductObject:
     min_price = min(v.price for v in variant_objects)
 
     return ProductObject(
+        product_id=product.id,
         name=product.title or "",
         description=description,
         price=min_price,
         image_url=image_url,
+        inventory=inventory,
         variants=variant_objects,
     )

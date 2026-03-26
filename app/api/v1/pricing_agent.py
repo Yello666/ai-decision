@@ -1,36 +1,55 @@
-from fastapi import APIRouter, HTTPException
+import logging
+from typing import List
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.api.deps import get_current_merchant
 from app.core.responses import success
-from app.services.pricing_agent import run_pricing_agent
+from app.models import Merchant
+from app.services.pricing_agent import run_pricing_analysis
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/pricing-agent", tags=["pricing-agent"])
 
 
 class PricingAgentRequest(BaseModel):
-    """动态调价 Agent 请求体。"""
+    """动态调价分析请求体。"""
 
-    query: str = Field(..., description="用户输入，例如：帮我看看这个商品价格是否需要调整")
-
-
-@router.post("/analyze", response_model=dict)
-def analyze_pricing(payload: PricingAgentRequest):
-    """执行 ReAct 调价分析。"""
-
-    if not payload.query.strip():
-        raise HTTPException(status_code=400, detail="query 不能为空")
-
-    result = run_pricing_agent(payload.query)
-    return success(
-        {
-            "product_name": result.product_name,
-            "own_price": result.own_price,
-            "inventory_status": result.inventory_status,
-            "competitor_prices": result.competitor_prices,
-            "recommended_price": result.recommended_price,
-            "action": result.action,
-            "reasoning": result.reasoning,
-            "raw_output": result.raw_output,
-        }
+    product_ids: List[int] = Field(
+        ...,
+        min_length=1,
+        max_length=5,
+        description="用户选择的 Shopify product ID 列表（最多 5 个）",
     )
+
+
+@router.post("/analyze")
+async def analyze_pricing(
+    payload: PricingAgentRequest,
+    merchant: Merchant = Depends(get_current_merchant),
+):
+    """根据商品 ID 列表执行调价分析，返回结构化 JSON 建议。"""
+    logger.info(
+        "Pricing Analysis Request - Merchant: %s (ID: %s), Products: %s",
+        merchant.name,
+        merchant.id,
+        payload.product_ids,
+    )
+
+    try:
+        result = await run_pricing_analysis(merchant, payload.product_ids)
+        logger.info(
+            "Pricing Analysis Success - Merchant: %s, Products analyzed: %d",
+            merchant.name,
+            len(payload.product_ids),
+        )
+        return success(data=result)
+    except Exception:
+        logger.exception(
+            "Pricing Analysis Error - Merchant: %s, Products: %s",
+            merchant.name,
+            payload.product_ids,
+        )
+        raise HTTPException(status_code=500, detail="调价分析服务暂时不可用，请稍后重试")
