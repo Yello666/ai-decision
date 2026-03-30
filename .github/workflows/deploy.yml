@@ -58,5 +58,6 @@ jobs:
             docker run -d \
               --name shop-ai \
               -p 8000:8000 \
+              -v /root/.env:/app/.env \
               --restart always \
               ${{ env.ACR_REPO }}:latest
