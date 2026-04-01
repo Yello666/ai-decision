@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, List, Literal
+from typing import Annotated, Optional, List, Literal, Union
 from datetime import datetime
 
 from pydantic import BaseModel, Field
@@ -10,16 +10,40 @@ from app.schemas.product import ProductObject
 
 
 # --------------------------
+# 热点 + 品牌 + 产品 → 病毒短视频生成请求
+# --------------------------
+class TrendProductVideoRequest(BaseModel):
+    """结合热点、品牌、产品信息生成病毒式短视频广告的请求体"""
+
+    trendObject: TrendObject = Field(..., description="热点事件信息")
+    brandObject: BrandObject = Field(..., description="品牌信息（名称、人设、风格）")
+    productObject: ProductObject = Field(..., description="产品信息（名称、核心卖点）")
+    user_prompt: Optional[str] = Field(default=None, description="用户额外补充指令")
+
+    generation_type: Literal["text_to_video", "image_to_video", "ref_to_video"] = Field(
+        default="text_to_video",
+        description="生成模式: text_to_video / image_to_video / ref_to_video",
+    )
+    duration: Optional[int] = Field(default=5, ge=1, le=12, description="视频时长（秒）")
+    ratio: Optional[str] = Field(default="16:9", description="视频比例，如 16:9 / 9:16 / 1:1")
+    generate_audio: Optional[bool] = Field(
+        default=None,
+        description="是否生成音频（仅图生视频有效）",
+    )
+    image_urls: Optional[List[str]] = Field(
+        default=None,
+        description="参考图 URL 列表，用于 image_to_video / ref_to_video 模式",
+    )
+    watermark: Optional[bool] = Field(default=False, description="是否添加水印")
+
+
+# --------------------------
 # 通用：结合热点 + 品牌的生成请求基类
 # --------------------------
-class ContentGenerateRequest(BaseModel):
-    """保留兼容：旧版统一生成请求"""
-    title: str
-    prompt: str
-
-
-
-
+# class ContentGenerateRequest(BaseModel):
+#     """保留兼容：旧版统一生成请求"""
+#     title: str
+#     prompt: str
 
 
 class GenerateVideoRequest(BaseModel):
@@ -102,4 +126,140 @@ class GenerationOut(BaseModel):
     class Config:
         from_attributes = True
 
+
+# ----------------------------------------------------------
+# Seedance 1.5 Pro 视频生成 (火山引擎方舟官方 API 格式)
+# POST   /api/v3/contents/generations/tasks      创建任务
+# GET    /api/v3/contents/generations/tasks/{id}  查询任务
+# ----------------------------------------------------------
+
+class TextContentItem(BaseModel):
+    """content 数组中的文本项"""
+    type: Literal["text"] = "text"
+    text: str = Field(..., description="输入给模型的文本内容，描述期望生成的视频")
+
+
+class ImageUrlObject(BaseModel):
+    url: str = Field(..., description="图片 URL 地址")
+
+
+class ImageUrlContentItem(BaseModel):
+    """content 数组中的图片项"""
+    type: Literal["image_url"] = "image_url"
+    image_url: ImageUrlObject = Field(..., description="图片对象")
+    role: Optional[str] = Field(default=None, description="图片的位置或用途")
+
+
+ContentItem = Annotated[
+    Union[TextContentItem, ImageUrlContentItem],
+    Field(discriminator="type"),
+]
+
+
+class _VideoRequestBase(BaseModel):
+    """Seedance 1.5 Pro 视频生成请求公共字段（与火山引擎方舟 API 对齐）"""
+    model: str = Field(
+        default="ep-20260330165459-vmz9x",
+        description="模型 Endpoint ID 或 Model ID",
+    )
+    resolution: Optional[str] = Field(
+        default=None,
+        description="视频分辨率: 480p / 720p / 1080p，Seedance 1.5 Pro 默认 720p",
+    )
+    ratio: Optional[str] = Field(default=None, description="视频宽高比: 16:9 / 4:3 / 1:1 / 3:4 / 9:16 / 21:9 / adaptive")
+    duration: Optional[int] = Field(default=5, description="视频时长(秒)，Seedance 1.5 Pro 支持 4~12 或 -1(自动)")
+    watermark: Optional[bool] = Field(default=False, description="是否添加水印")
+    generate_audio: Optional[bool] = Field(
+        default=None,
+        description="是否生成同步音频(仅 Seedance 1.5 Pro)，默认 true",
+    )
+    seed: Optional[int] = Field(default=None, description="随机种子，-1 为随机")
+    camera_fixed: Optional[bool] = Field(default=None, description="是否固定摄像头")
+    draft: Optional[bool] = Field(default=None, description="是否开启样片模式(仅 Seedance 1.5 Pro)")
+    service_tier: Optional[str] = Field(default=None, description="服务等级: default(在线推理) / flex(离线推理)")
+    return_last_frame: Optional[bool] = Field(default=None, description="是否返回尾帧图像")
+    callback_url: Optional[str] = Field(default=None, description="任务结果回调通知地址")
+    execution_expires_after: Optional[int] = Field(default=None, description="任务超时阈值(秒)，默认 172800")
+
+
+class Text2VideoRequest(_VideoRequestBase):
+    """文生视频请求结构体 —— content 仅包含 text 项"""
+    content: List[TextContentItem] = Field(..., description="文本内容数组")
+    ratio: Optional[str] = Field(default="16:9", description="视频宽高比，Seedance 1.5 Pro 文生视频默认 adaptive")
+
+
+class Image2VideoRequest(_VideoRequestBase):
+    """图生视频请求结构体 —— content 包含 text 项和 image_url 项"""
+    content: List[ContentItem] = Field(
+        ..., description="内容数组，包含文本和图片信息",
+    )
+    ratio: Optional[str] = Field(default="adaptive", description="视频宽高比，图生视频默认 adaptive")
+
+
+# ----------------------------------------------------------
+# Seedance 1.0 Lite i2v — 参考图生视频
+# 支持 1~4 张参考图(role=reference_image) + 可选文本提示词
+# ----------------------------------------------------------
+
+class Ref2VideoRequest(BaseModel):
+    """参考图生视频请求 —— Seedance 1.0 Lite i2v，支持 1~4 张参考图"""
+    model: str = Field(
+        default="ep-20260331152207-2n5zd",
+        description="Seedance 1.0 Lite i2v 的 Endpoint ID 或 Model ID",
+    )
+    content: List[ContentItem] = Field(
+        ...,
+        description="内容数组: 可选文本提示词 + 1~4 张参考图(role=reference_image)",
+    )
+    resolution: Optional[str] = Field(
+        default=None,
+        description="视频分辨率: 480p / 720p（参考图场景不支持 1080p）",
+    )
+    ratio: Optional[str] = Field(default="16:9", description="视频宽高比，参考图场景默认 16:9，不支持 adaptive")
+    duration: Optional[int] = Field(default=5, description="视频时长(秒)，2~12")
+    watermark: Optional[bool] = Field(default=False, description="是否添加水印")
+    seed: Optional[int] = Field(default=None, description="随机种子，-1 为随机")
+    service_tier: Optional[str] = Field(default=None, description="服务等级: default(在线推理) / flex(离线推理)")
+    return_last_frame: Optional[bool] = Field(default=None, description="是否返回尾帧图像")
+    callback_url: Optional[str] = Field(default=None, description="任务结果回调通知地址")
+    execution_expires_after: Optional[int] = Field(default=None, description="任务超时阈值(秒)，默认 172800")
+
+
+# ---------- 创建任务响应 ----------
+
+class CreateVideoTaskResponse(BaseModel):
+    """创建视频生成任务后的响应"""
+    id: str = Field(..., description="视频生成任务 ID，如 cgt-20250918170228-dw9rb")
+    status: str = Field(..., description="任务状态，提交成功时为 submitted")
+
+
+# ---------- 查询任务响应 ----------
+
+class VideoTaskContent(BaseModel):
+    video_url: Optional[str] = Field(default=None, description="生成的视频 URL")
+
+
+class VideoTaskUsage(BaseModel):
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+
+
+class VideoTaskError(BaseModel):
+    code: Optional[str] = None
+    message: Optional[str] = None
+
+
+class VideoTaskStatusResponse(BaseModel):
+    """查询视频生成任务状态的响应"""
+    id: Optional[str] = Field(default=None, description="任务 ID")
+    model: Optional[str] = Field(default=None, description="模型名称-版本")
+    status: str = Field(
+        ...,
+        description="任务状态: queued / running / succeeded / failed / cancelled",
+    )
+    created_at: Optional[int] = Field(default=None, description="创建时间 (Unix 时间戳)")
+    updated_at: Optional[int] = Field(default=None, description="更新时间 (Unix 时间戳)")
+    content: Optional[VideoTaskContent] = None
+    usage: Optional[VideoTaskUsage] = None
+    error: Optional[VideoTaskError] = None
 

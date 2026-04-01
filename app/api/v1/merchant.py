@@ -24,7 +24,7 @@ def set_brand_info(
         current_merchant: Merchant = Depends(get_current_merchant),
         db: Session = Depends(get_db)
 ):
-    brand = create_or_update_brand(db, current_merchant, brand_object.model_dump())
+    brand = create_or_update_brand(db, current_merchant, brand_object.model_dump(by_alias=True))
     
     # 将 audience 转回 list 返回
     res = BrandObject(
@@ -45,7 +45,7 @@ def update_brand_info(
         db: Session = Depends(get_db)
 ):
     # 使用 exclude_unset=True 实现部分更新
-    update_data = brand_object.model_dump(exclude_unset=True)
+    update_data = brand_object.model_dump(exclude_unset=True, by_alias=True)
     brand = create_or_update_brand(db, current_merchant, update_data)
     
     res = BrandObject(

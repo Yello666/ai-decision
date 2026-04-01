@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Optional
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,28 +12,52 @@ class Settings(BaseSettings):
         extra="ignore"  # 忽略 .env 中多余的配置项，防止报错
     )
 
+    # -------- 本地开发开关 --------
+    # True  → 使用下方 _LOCAL_* 的虚拟机地址（忽略 .env 中的数据库/Redis 配置）
+    # False → 使用 .env 中的云数据库配置（部署时设为 False）
+    LOCAL_DEV: bool = False
+
     PROJECT_NAME: str = "AI Decision Platform"
     API_V1_PREFIX: str = "/api/v1"
-    # 有默认值，容器会先读这个不会读.env
-    # Database
-    # MYSQL_HOST: str="192.168.64.2"
-    # MYSQL_PASSWORD:str="123456"
-    MYSQL_HOST: str
+
+    # Database（默认值会被 .env 覆盖，再被 LOCAL_DEV 覆盖）
+    MYSQL_HOST: str 
+    MYSQL_PASSWORD: str 
     MYSQL_PORT: int = 3306
     MYSQL_USER: str = "root"
-    MYSQL_PASSWORD:str
     MYSQL_DB: str = "shopify_ai"
 
     MYSQL_POOL_SIZE: int = 10
     MYSQL_MAX_OVERFLOW: int = 20
 
     # Redis
-    # REDIS_HOST: str="192.168.64.2"
-    # REDIS_PASSWORD:str="123456"
-    REDIS_HOST: str
-    REDIS_PORT: int = 6379
+    REDIS_HOST: str = "localhost"
+    REDIS_PASSWORD: str = ""
     REDIS_DB: int = 0
-    REDIS_PASSWORD:str
+    REDIS_PORT: int = 6379
+
+    # -------- 本地开发配置（仅 LOCAL_DEV=True 时生效） --------
+    _LOCAL_MYSQL_HOST: str = "192.168.64.2"
+    _LOCAL_MYSQL_PASSWORD: str = "123456"
+    _LOCAL_MYSQL_USER: str = "root"
+    _LOCAL_MYSQL_PORT: int = 3306
+    _LOCAL_REDIS_HOST: str = "192.168.64.2"
+    _LOCAL_REDIS_PASSWORD: str = "123456"
+    _LOCAL_SHOPIFY_REDIRECT_URL:str = "http://127.0.0.1:8000/api/v1/auth/shopify/callback"
+
+    @model_validator(mode="after")
+    def _apply_local_dev_overrides(self) -> "Settings":
+        """LOCAL_DEV=True 时，强制使用虚拟机地址，优先级高于 .env"""
+        if self.LOCAL_DEV:
+            self.MYSQL_HOST = self._LOCAL_MYSQL_HOST
+            self.MYSQL_PASSWORD = self._LOCAL_MYSQL_PASSWORD
+            self.MYSQL_USER = self._LOCAL_MYSQL_USER
+            self.MYSQL_PORT = self._LOCAL_MYSQL_PORT
+            self.REDIS_HOST = self._LOCAL_REDIS_HOST
+            self.REDIS_PASSWORD = self._LOCAL_REDIS_PASSWORD
+            self.SHOPIFY_REDIRECT_URI=self._LOCAL_SHOPIFY_REDIRECT_URL
+        return self
+
 
     # JWT
     JWT_SECRET_KEY: str
@@ -53,7 +78,7 @@ class Settings(BaseSettings):
     SHOPIFY_API_KEY: str
     SHOPIFY_API_SECRET: str
     SHOPIFY_API_VERSION: str = "2026-01"
-    SHOPIFY_REDIRECT_URI: str = "http://127.0.0.1:8000/api/v1/auth/shopify/callback"
+    SHOPIFY_REDIRECT_URI: str
 
     AUTODL_SERVICE_URL: str = "http://localhost:8001/predict"
 
@@ -62,10 +87,14 @@ class Settings(BaseSettings):
     SEEDANCE_BASE_URL: str = "https://seedance2.app/api/v1"
     SEEDANCE_IMAGE_MODEL: str = "seedream-4.5"
 
+    # Seedance 1.5 Pro 视频生成 (火山引擎方舟)
+    SEEDANCE_VIDEO_API_KEY: str
+
     # LLM (Qwen / DashScope)
     LLM_API_KEY: Optional[str] = None
     LLM_API_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     LLM_MODEL: str = "qwen3.5-plus"
+
 
     # Agent LLM (Volcengine / Doubao)
     VOLCENGINE_API_KEY: str

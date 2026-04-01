@@ -109,7 +109,7 @@ def _batch_match_with_llm(requests: List[HotspotMatchRequest]) -> List[HotspotMa
             },
             "brand": {
                 "name": req.brand.name,
-                "industry": req.brand.industry,
+                "mainly_sold_products": req.brand.mainly_sold_products,
                 "core_value": req.brand.core_value,
                 "tone": req.brand.tone,
                 "audience": req.brand.audience
@@ -161,6 +161,8 @@ Output Format:
         responses = []
         for res in llm_results_list:
             responses.append(HotspotMatchResponse(
+                brand_name=requests[int(res["index"])].brand.name,
+                trend_title=requests[int(res["index"])].trend.title,
                 compatibility_score=float(res["compatibility_score"]),
                 recommendation=RecommendationLevel.from_str(res["recommendation"]),
                 radar=MatchRadar(
@@ -200,7 +202,7 @@ def _match_with_llm(trend: TrendObject, brand: BrandObject, opt: HotspotMatchOpt
 
 【品牌信息】
 名称：{brand.name}
-主要售卖产品：{brand.industry}
+主要售卖产品：{brand.mainly_sold_products}
 核心价值：{brand.core_value or '未提供'}
 品牌调性：{brand.tone}
 目标受众：{', '.join(brand.audience) if brand.audience else '未提供'}
@@ -253,6 +255,8 @@ JSON 格式示例：
                 raise KeyError(f"缺少必要字段: {key}")
 
         return HotspotMatchResponse(
+            brand_name=brand.name,
+            trend_title=trend.title,
             compatibility_score=float(result["compatibility_score"]),
             recommendation=RecommendationLevel.from_str(result["recommendation"]),
             radar=MatchRadar(
@@ -314,7 +318,7 @@ def _match_with_rules(trend: TrendObject, brand: BrandObject, opt: HotspotMatchO
 
     # Step 2: 语义相关性（离线向量：TF-IDF）
     trend_text = f"{trend.title}\n{trend.summary}\n{_safe_join(trend.tags)}"
-    brand_text = f"{brand.name}\n{brand.industry}\n{brand.core_value or ''}\n{brand.tone}"
+    brand_text = f"{brand.name}\n{brand.mainly_sold_products}\n{brand.core_value or ''}\n{brand.tone}"
     semantic = _tfidf_cosine(trend_text, brand_text) * 100.0
 
     # Step 3: 调性/创意维度
@@ -349,6 +353,8 @@ def _match_with_rules(trend: TrendObject, brand: BrandObject, opt: HotspotMatchO
     )
 
     return HotspotMatchResponse(
+        brand_name=brand.name,
+        trend_title=trend.title,
         compatibility_score=score,
         recommendation=rec,
         radar=MatchRadar(
@@ -496,7 +502,7 @@ def _creative_space(trend: TrendObject, brand: BrandObject, semantic_relevance: 
     if tags & playful:
         bonus += 15.0
     # 行业词在热点里出现也加一点（说明能“搭界”）
-    if brand.industry and brand.industry in (trend.title + trend.summary):
+    if brand.mainly_sold_products and brand.mainly_sold_products in (trend.title + trend.summary):
         bonus += 10.0
     base = 0.55 * semantic_relevance + 20.0
     return float(max(0.0, min(100.0, base + bonus)))
@@ -525,8 +531,8 @@ def _one_line_suggestion(trend: TrendObject, brand: BrandObject) -> str:
             tag = t
             break
     if tag:
-        return f"结合热点的「{tag}」元素，用品牌「{brand.tone}」口吻做一张主视觉+一句slogan，落到与「{brand.industry}」相关的具体卖点。"
-    return f"用品牌「{brand.tone}」口吻复述热点核心点，并把话题自然引到「{brand.industry}」的一个具体场景/痛点上。"
+        return f"结合热点的「{tag}」元素，用品牌「{brand.tone}」口吻做一张主视觉+一句slogan，落到与「{brand.mainly_sold_products}」相关的具体卖点。"
+    return f"用品牌「{brand.tone}」口吻复述热点核心点，并把话题自然引到「{brand.mainly_sold_products}」的一个具体场景/痛点上。"
 
 def _tokenize_cn(text: str) -> list[str]:
     text = (text or "").strip()

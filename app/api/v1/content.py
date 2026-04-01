@@ -6,7 +6,6 @@ from app.core.responses import success
 from app.db.mysql import get_db
 from app.models import Merchant
 from app.schemas.content import (
-    ContentGenerateRequest,
     GenerateVideoRequest,
     GenerateVideoResponse,
     GenerateImageRequest,
@@ -280,33 +279,33 @@ def generation_list(
     return success([GenerationOut.model_validate(g) for g in items])
 
 
-# --------------------------
-# 兼容旧接口：统一 generate（保留占位，建议迁移到上述三个接口）
-# --------------------------
-@router.post("/generate")
-def generate_content(
-    payload: ContentGenerateRequest,
-    current_merchant: Merchant = Depends(get_current_merchant),
-    db: Session = Depends(get_db),
-):
-    """
-    旧版统一生成接口（占位）。建议使用：
-    - POST /content/generate-video
-    - POST /content/generate-image
-    - POST /content/generate-text
-    """
-    generated_text = (
-        f"[Deprecated] 请使用 /content/generate-text 并传入 trend + brand。"
-        f"原请求: title={payload.title}, prompt={payload.prompt}"
-    )
-    gen = create_deprecated_text_record(
-        db,
-        current_merchant.shopify_store_id,
-        payload.title,
-        payload.prompt,
-        generated_text,
-    )
-    return success(GenerationOut.model_validate(gen))
+# # --------------------------
+# # 兼容旧接口：统一 generate（保留占位，建议迁移到上述三个接口）
+# # --------------------------
+# @router.post("/generate")
+# def generate_content(
+#     payload: ContentGenerateRequest,
+#     current_merchant: Merchant = Depends(get_current_merchant),
+#     db: Session = Depends(get_db),
+# ):
+#     """
+#     旧版统一生成接口（占位）。建议使用：
+#     - POST /content/generate-video
+#     - POST /content/generate-image
+#     - POST /content/generate-text
+#     """
+#     generated_text = (
+#         f"[Deprecated] 请使用 /content/generate-text 并传入 trend + brand。"
+#         f"原请求: title={payload.title}, prompt={payload.prompt}"
+#     )
+#     gen = create_deprecated_text_record(
+#         db,
+#         current_merchant.shopify_store_id,
+#         payload.title,
+#         payload.prompt,
+#         generated_text,
+#     )
+#     return success(GenerationOut.model_validate(gen))
 
 
 # # --------------------------

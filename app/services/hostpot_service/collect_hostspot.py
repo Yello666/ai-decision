@@ -55,6 +55,8 @@ async def collect_and_format_hot_data_async(platforms: List[str], max_results: i
                 item.sentiment_score = analysis_res.get("sentiment_score", 0.0)
                 item.risk_category = analysis_res.get("risk_category")
                 item.warning_message = analysis_res.get("warning_message")
+                if item.view_count == 0 and item.likes == 0:
+                    item.warning_message = "暂无更多信息，建议前往平台进行搜索。"
                 item.audience = analysis_res.get("audience", [])
                 result.append(item)
     return result
@@ -92,6 +94,8 @@ def collect_and_format_hot_data(platforms: str, max_results: int = 5) -> List[Co
                 item.sentiment_score = analysis_res.get("sentiment_score", 0.0)
                 item.risk_category = analysis_res.get("risk_category")
                 item.warning_message = analysis_res.get("warning_message")
+                if item.view_count == 0 and item.likes == 0:
+                    item.warning_message = "暂无更多信息，建议前往平台进行搜索。"
                 item.audience = analysis_res.get("audience", [])
                 result.append(item)
     return result

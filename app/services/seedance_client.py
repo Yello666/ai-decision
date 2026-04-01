@@ -162,3 +162,71 @@ async def start_image_generation(
         err = data["error"]
         raise RuntimeError(err.get("message", "SeedDance image generation failed"))
     return data.get("data") or {}
+
+
+# ==========================================================
+# Seedance 1.5 Pro — 火山引擎方舟视频生成 API
+# 文档: https://www.volcengine.com/docs/82379/1520757
+# Base URL: https://ark.cn-beijing.volces.com/api/v3
+# ==========================================================
+
+def _volcengine_headers() -> dict[str, str]:
+    settings = get_settings()
+    key = settings.SEEDANCE_VIDEO_API_KEY or ""
+    if not key or key == "your-seedance-video-api-key-placeholder":
+        raise ValueError("SEEDANCE_VIDEO_API_KEY 未配置，请在 .env 中设置有效的 API Key")
+    return {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+
+def _volcengine_base_url() -> str:
+    return get_settings().VOLCENGINE_BASE_URL.rstrip("/")
+
+
+async def create_seedance_video_task(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    创建视频生成任务。
+    POST {base_url}/contents/generations/tasks
+    请求体与火山引擎官方 API 一致（model, content, ratio, duration, watermark）。
+    返回 {"id": "cgt-xxx", "status": "submitted"}。
+    """
+    url = f"{_volcengine_base_url()}/contents/generations/tasks"
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(url, headers=_volcengine_headers(), json=payload)
+    if not resp.is_success:
+        err_detail = resp.text
+        try:
+            err_detail = resp.json()
+        except Exception:
+            pass
+        logger.error(
+            "Seedance 1.5 Pro create task failed: status=%s body=%s",
+            resp.status_code, err_detail,
+        )
+        resp.raise_for_status()
+    return resp.json()
+
+
+async def query_seedance_video_task(task_id: str) -> dict[str, Any]:
+    """
+    查询视频生成任务状态。
+    GET {base_url}/contents/generations/tasks/{id}
+    返回 {model, status, created_at, updated_at, content: {video_url}, usage, error}。
+    """
+    url = f"{_volcengine_base_url()}/contents/generations/tasks/{task_id}"
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(url, headers=_volcengine_headers())
+    if not resp.is_success:
+        err_detail = resp.text
+        try:
+            err_detail = resp.json()
+        except Exception:
+            pass
+        logger.error(
+            "Seedance 1.5 Pro query task failed: status=%s body=%s task_id=%s",
+            resp.status_code, err_detail, task_id,
+        )
+        resp.raise_for_status()
+    return resp.json()

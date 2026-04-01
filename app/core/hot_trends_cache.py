@@ -59,17 +59,20 @@ async def get_hot_trends_cached(
             #查看数据是否过期
             if time.time() < expire_at:
                 # 数据未过期，直接返回
+                print("热点视频缓存命中")
                 return data
             # 逻辑已过期：先返旧数据，再尝试抢锁刷新。只有没有lock_key的时候,acquired才为true，会抢到锁
             acquired = await redis.set(lock_key, "1", nx=True, ex=LOCK_TTL_SECONDS)
             # 抢到锁之后，异步执行刷新缓存的任务
             if acquired:
                 asyncio.create_task(_refresh_and_set(redis, key, lock_key, platforms or ["youtube"], max_results, loader))
+            print("热点视频缓存命中，但已过期")
             return data
         except (json.JSONDecodeError, KeyError, Exception):
             pass
 
     # 缓存缺失：没有缓存的时候，等待缓存回填之后再返回数据
+    print("热点视频缓存未命中")
     while True:
         acquired = await redis.set(lock_key, "1", nx=True, ex=LOCK_TTL_SECONDS)
         if acquired:

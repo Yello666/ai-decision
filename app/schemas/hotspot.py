@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 
@@ -59,17 +59,29 @@ class CollectTrendObject(BaseModel):
 
 
 class BrandObject(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     name: str = Field(..., description="品牌名称")
     core_value: Optional[str] = Field(default=None, description="品牌Slogan/核心价值")
-    industry: str = Field(..., description="品牌行业/品类")
+    mainly_sold_products: str = Field(
+        ...,
+        description="主要售卖商品品类",
+        alias="industry",
+    )
     tone: str = Field(..., description="品牌调性（年轻/高端/搞怪/严谨等）")
     audience: Optional[List[str]] = Field(default=None, description="品牌目标受众（可选）")
 
 
 class BrandUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     name: Optional[str] = Field(default=None, description="品牌名称")
     core_value: Optional[str] = Field(default=None, description="品牌Slogan/核心价值")
-    industry: Optional[str] = Field(default=None, description="品牌行业/品类")
+    mainly_sold_products: Optional[str] = Field(
+        default=None,
+        description="主要售卖商品品类",
+        alias="industry",
+    )
     tone: Optional[str] = Field(default=None, description="品牌调性（年轻/高端/搞怪/严谨等）")
     audience: Optional[List[str]] = Field(default=None, description="品牌目标受众（可选）")
 
@@ -129,6 +141,8 @@ class HotspotMatchRequest(BaseModel):
 
 
 class HotspotMatchResponse(BaseModel):
+    brand_name: str = Field(..., description="品牌名")
+    trend_title: str = Field(..., description="热点标题")
     compatibility_score: float = Field(..., ge=0, le=100, description="契合度得分（0-100）")
     recommendation: RecommendationLevel
     radar: MatchRadar

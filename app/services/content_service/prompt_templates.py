@@ -28,7 +28,7 @@ def build_video_prompt(
     base = (
         f"Create a short marketing video clip base below information . "
         f"Trend context: {trend.title}. {trend.summary}. Tags: {tags_str}. "
-        f"Brand: {brand.name}, {brand.industry}, tone: {brand.tone}. "
+        f"Brand: {brand.name}, {brand.mainly_sold_products}, tone: {brand.tone}. "
         f"{product_str}"
         f"Target audience: {audience_brand}. "
         f"Style: funny, aligned with the trend and brand. "
@@ -55,7 +55,7 @@ def build_image_prompt(
     base = (
         f"Marketing image or poster. "
         f"Trend: {trend.title}. {trend.summary}. Tags: {tags_str}. audience: {trend.audience}"
-        f"Brand: {brand.name}, {brand.industry}, tone: {brand.tone}. "
+        f"Brand: {brand.name}, {brand.mainly_sold_products}, tone: {brand.tone}. "
         f"Visual style: high quality, on-brand, trend-aware, suitable for social or e-commerce. "
     )
     if brand.core_value:
@@ -63,6 +63,46 @@ def build_image_prompt(
     if user_prompt:
         base += f"Extra: {user_prompt}. "
     return base.strip()
+
+# 病毒短视频 Prompt
+def build_trend_product_video_prompt(
+    trend: TrendObject,
+    brand: BrandObject,
+    product: ProductObject,
+    user_prompt: str | None = None,
+) -> str:
+    """
+    组装"热点 × 品牌 × 产品"病毒短视频 Prompt。
+    输出英文，供 Seedance 模型直接消费。
+    """
+    tags_str = ", ".join(trend.tags) if trend.tags else "trending"
+    selling_points = f"{product.name}: {product.description}, price: {product.price}$"
+
+    system_instruction = (
+        "You are a creative advertising director who specializes in making viral short videos. "
+        "Based on the following information, write a video generation prompt."
+    )
+
+    input_section = (
+        f"[Trend Background]: {trend.title}. {trend.summary}. Tags: {tags_str}.\n"
+        f"[Brand Persona]: {brand.name} (Style: {brand.tone}). "
+        f"Products: {brand.mainly_sold_products}."
+    )
+    if brand.core_value:
+        input_section += f" Slogan: {brand.core_value}."
+    input_section += f"\n[Product Selling Points]: {selling_points}."
+    if user_prompt:
+        input_section += f"\n[User Requirements]: {user_prompt}."
+
+    generation_rules = (
+        "[Generation Rules]\n"
+        "1. Style: Must be extremely exaggerated, funny, and full of drama. Use fast-paced camera language.\n"
+        "2. Content: Naturally integrate the product into the trending topic while reflecting the brand persona.\n"
+        "3. Format: Output an English description with scene depiction, actions, and atmosphere words "
+        "(e.g.: funny, exaggerated, chaotic, meme-style, viral, over-the-top)."
+    )
+
+    return f"{system_instruction}\n\n{input_section}\n\n{generation_rules}"
 
 
 def build_text_prompt(
@@ -92,7 +132,7 @@ def build_text_prompt(
     brand_block = (
         f"【品牌信息】\n"
         f"品牌名：{brand.name}\n"
-        f"行业：{brand.industry}\n"
+        f"主要售卖商品品类：{brand.mainly_sold_products}\n"
         f"调性：{brand.tone}\n"
         f"目标受众：{audience}\n"
     )
