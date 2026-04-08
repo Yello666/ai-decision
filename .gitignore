@@ -1,8 +1,32 @@
+# macOS
+.DS_Store
+
 # 敏感配置，切勿提交（组员拉代码不会拿到你的 .env）
 .env
 .env.local
 .env.*.local
 
 .venv/
+venv/
 __pycache__/
 *.py[cod]
+
+# 编辑器（个人/本机配置；若团队要共享 .vscode 可删 .vscode/ 这一行）
+.idea/
+.vscode/
+
+# Python 打包与构建产物
+*.egg-info/
+*.egg
+dist/
+build/
+
+# 测试 / 类型检查 / 格式化 缓存
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 测试覆盖率
+.coverage
+coverage.xml
+htmlcov/
