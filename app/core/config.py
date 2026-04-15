@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # -------- 本地开发开关 --------
     # True  → 使用下方 _LOCAL_* 的虚拟机地址（忽略 .env 中的数据库/Redis 配置）
     # False → 使用 .env 中的云数据库配置（部署时设为 False）
-    LOCAL_DEV: bool = False
+    LOCAL_DEV: bool = True
 
     PROJECT_NAME: str = "AI Decision Platform"
     API_V1_PREFIX: str = "/api/v1"
@@ -105,7 +105,7 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: str
     SERPAPI_API_KEY: Optional[str] = None
 
-    # Competitor cache
+    # Competitor cache（2h）
     COMPETITOR_CACHE_TTL: int = 7200
 
     # Test flags

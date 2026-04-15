@@ -1,3 +1,5 @@
+import math
+
 from fastapi import APIRouter, HTTPException
 from typing import List
 
@@ -5,8 +7,8 @@ from app.core.hot_trends_cache import get_hot_trends_cached
 from app.schemas.hotspot import (
     HotspotMatchRequest,
     HotspotMatchResponse,
-    CollectTrendObject,
     HotspotTrendRequest,
+    PaginatedTrendResponse,
 )
 from app.services.hostpot_service.analyse_matching_degree import match_hotspot_v2, batch_match_hotspot_v2
 from app.services.hostpot_service.collect_hostspot import collect_and_format_hot_data_async
@@ -14,24 +16,31 @@ from app.services.hostpot_service.collect_hostspot import collect_and_format_hot
 router = APIRouter(prefix="/hotspot", tags=["hotspot"])
 
 
-# 1. 获取热点数据（逻辑过期缓存 + 异步 HTTP）
-# 明明是Get的语义却使用post：因为fastAPI规定get请求不能含有请求体，而这个请求需要传入请求体
-@router.post("/hot-trends", response_model=List[CollectTrendObject], summary="获取含完整字段的热点JSON数据")
+@router.post("/hot-trends", response_model=PaginatedTrendResponse, summary="获取热点数据（分页）")
 async def get_hot_trends(request: HotspotTrendRequest):
     """
-    获取热点趋势数据。使用 Redis 逻辑过期缓存，过期先返旧数据并后台刷新，避免击穿。
-    - platforms: 平台列表，如 ["youtube"]
-    - max_results: 每个平台获取的结果数量
+    获取热点趋势数据（分页）。
+    后端固定缓存 50 条全量数据，前端按 page / page_size 翻页，每页最多 10 条，最多 5 页。
     """
     try:
-        platforms = request.platforms if request.platforms else ["youtube"]
-        # 尝试从缓存中获取热点信息
-        hot_trends = await get_hot_trends_cached(
-            platforms,
-            request.max_results,
+        all_trends = await get_hot_trends_cached(
+            request.platforms,
             loader=collect_and_format_hot_data_async,
         )
-        return hot_trends
+
+        total = len(all_trends)
+        total_pages = math.ceil(total / request.page_size) if total else 0
+        start = (request.page - 1) * request.page_size
+        end = start + request.page_size
+        items = all_trends[start:end]
+
+        return PaginatedTrendResponse(
+            items=items,
+            total=total,
+            page=request.page,
+            page_size=request.page_size,
+            total_pages=total_pages,
+        )
     except Exception as e:
         msg = str(e).replace("\n", " ").replace("\\n", " ").strip()
         raise HTTPException(status_code=500, detail=f"获取热点数据失败：{msg}")

@@ -1,7 +1,8 @@
 import os
 import json
+import logging
 from typing import List, Dict, Any
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 from app.schemas.hotspot import (
     SentimentCN,
     CollectTrendObject
@@ -9,12 +10,14 @@ from app.schemas.hotspot import (
 from app.services.trending_service import get_youtube_trends
 from app.services.trending_service.get_youtube_trends import get_trending_videos_async
 
-# 你可以用任何兼容 OpenAI API 的后端
-LLM_CLIENT = OpenAI(
-    base_url=os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-    api_key=os.getenv("LLM_API_KEY", "sk-b0fc3528ced64aa4b31eca19eb10fb39"),
-)
+logger = logging.getLogger(__name__)
+
+_LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+_LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-b0fc3528ced64aa4b31eca19eb10fb39")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen-plus")
+
+LLM_CLIENT = OpenAI(base_url=_LLM_BASE_URL, api_key=_LLM_API_KEY)
+ASYNC_LLM_CLIENT = AsyncOpenAI(base_url=_LLM_BASE_URL, api_key=_LLM_API_KEY)
 
 BATCH_SIZE = 10
 
@@ -36,9 +39,9 @@ async def collect_and_format_hot_data_async(platforms: List[str], max_results: i
                 {"id": item.id, "title": item.title, "summary": item.summary, "tags": item.tags}
                 for item in batch
             ]
-            batch_results = _analyze_with_llm(analysis_inputs)
+            batch_results = await _analyze_with_llm_async(analysis_inputs)
             if not batch_results or "results" not in batch_results:
-                print(f"Batch LLM analysis failed or returned empty for batch starting at {i}")
+                logger.warning("Batch LLM analysis failed or returned empty for batch starting at %d", i)
                 continue
             results_list = batch_results["results"]
             res_map = {res["id"]: res for res in results_list if "id" in res}
@@ -47,7 +50,7 @@ async def collect_and_format_hot_data_async(platforms: List[str], max_results: i
                 if not analysis_res:
                     continue
                 if analysis_res.get("risk_category") == "RED_LINE" or not analysis_res.get("is_safe_for_marketing"):
-                    print(f"Skipping unsafe content: {item.title} (Reason: {analysis_res.get('risk_category')})")
+                    logger.info("Skipping unsafe content: %s (Reason: %s)", item.title, analysis_res.get('risk_category'))
                     continue
                 item.summary = analysis_res.get("summary", item.summary)
                 item.tags = analysis_res.get("tags", item.tags)
@@ -77,7 +80,7 @@ def collect_and_format_hot_data(platforms: str, max_results: int = 5) -> List[Co
             ]
             batch_results = _analyze_with_llm(analysis_inputs)
             if not batch_results or "results" not in batch_results:
-                print(f"Batch LLM analysis failed or returned empty for batch starting at {i}")
+                logger.warning("Batch LLM analysis failed or returned empty for batch starting at %d", i)
                 continue
             results_list = batch_results["results"]
             res_map = {res["id"]: res for res in results_list if "id" in res}
@@ -86,7 +89,7 @@ def collect_and_format_hot_data(platforms: str, max_results: int = 5) -> List[Co
                 if not analysis_res:
                     continue
                 if analysis_res.get("risk_category") == "RED_LINE" or not analysis_res.get("is_safe_for_marketing"):
-                    print(f"Skipping unsafe content: {item.title} (Reason: {analysis_res.get('risk_category')})")
+                    logger.info("Skipping unsafe content: %s (Reason: %s)", item.title, analysis_res.get('risk_category'))
                     continue
                 item.summary = analysis_res.get("summary", item.summary)
                 item.tags = analysis_res.get("tags", item.tags)
@@ -101,11 +104,8 @@ def collect_and_format_hot_data(platforms: str, max_results: int = 5) -> List[Co
     return result
 
 
-def _analyze_with_llm(content_list: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    调用大模型进行批量情感分析、风险评估和受众推断
-    """
-    prompt = f"""
+def _build_analysis_prompt(content_list: List[Dict[str, Any]]) -> str:
+    return f"""
  Role：电商营销风控专家。你将接收一组YouTube热点摘要列表（包含id, title, summary, tags），需逐一分析每个热点的商业机会与风险。 
  
  Analysis Rules (Apply to EACH item in the list):
@@ -142,40 +142,53 @@ def _analyze_with_llm(content_list: List[Dict[str, Any]]) -> Dict[str, Any]:
  # Input Data 
  {json.dumps(content_list, ensure_ascii=False)}
 """
-# json格式的两个大括号不可以变，因为prompt是一个f""字符串，里面的大括号会被解析为站位符，两个大括号可以被转义。
+
+
+def _log_token_usage(usage) -> None:
+    if usage:
+        logger.info(
+            "Token 消耗（%s）: prompt=%d, completion=%d, total=%d",
+            LLM_MODEL, usage.prompt_tokens, usage.completion_tokens, usage.total_tokens,
+        )
+
+
+async def _analyze_with_llm_async(content_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """异步调用大模型进行批量情感分析、风险评估和受众推断。"""
+    prompt = _build_analysis_prompt(content_list)
+    try:
+        response = await ASYNC_LLM_CLIENT.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        _log_token_usage(response.usage if hasattr(response, "usage") else None)
+        content = response.choices[0].message.content
+        return json.loads(content)
+    except Exception as e:
+        logger.exception("Async LLM analysis failed: %s", e)
+        return {}
+
+
+def _analyze_with_llm(content_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """同步调用大模型（保留给同步兼容函数使用）。"""
+    prompt = _build_analysis_prompt(content_list)
     try:
         response = LLM_CLIENT.chat.completions.create(
             model=LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,  # 区间为0-2，意思是是否选择概率最高的词，0则是一定选择，1是不一定选择，
-            # 太高输出会不稳定，不按照prompt规定的输出，大于0.5是可以忍受，大于1是不推荐的
-            response_format={"type": "json_object"}
+            temperature=0.0,
+            response_format={"type": "json_object"},
         )
-        #打印token用量
-        if hasattr(response, 'usage') and response.usage:
-            usage = response.usage
-            print("=" * 50)
-            print(f"Token消耗详情（{LLM_MODEL}）：")
-            print(f"输入Token（Prompt）：{usage.prompt_tokens}")
-            print(f"输出Token（Completion）：{usage.completion_tokens}")
-            print(f"总消耗Token：{usage.total_tokens}")
-            print("=" * 50)
-        else:
-            print("⚠️  未获取到Token使用信息，可能是API版本或模型不支持")
-
-
+        _log_token_usage(response.usage if hasattr(response, "usage") else None)
         content = response.choices[0].message.content
-
         return json.loads(content)
     except Exception as e:
-        print(f"LLM analysis failed: {e}")
+        logger.exception("LLM analysis failed: %s", e)
         return {}
 
 
 def _map_sentiment(label: str) -> SentimentCN:
-    """
-    将大模型返回的情感标签映射到系统定义的 SentimentCN
-    """
     mapping = {
         "正面": SentimentCN.positive,
         "中性": SentimentCN.neutral,

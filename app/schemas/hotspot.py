@@ -118,9 +118,19 @@ class RecommendationLevel(str, Enum):
 
 
 class HotspotTrendRequest(BaseModel):
-    """获取热点数据的请求参数结构体"""
+    """获取热点数据的请求参数结构体（分页）"""
     platforms: List[str] = Field(default=["youtube"], description="需要获取热点的平台列表")
-    max_results: int = Field(default=5, ge=1, le=50, description="每个平台获取的最大结果数")
+    page: int = Field(default=1, ge=1, le=5, description="页码（1-5）")
+    page_size: int = Field(default=10, ge=1, le=10, description="每页条数（1-10）")
+
+
+class PaginatedTrendResponse(BaseModel):
+    """分页热点响应"""
+    items: List[CollectTrendObject] = Field(description="当前页热点列表")
+    total: int = Field(description="热点总条数")
+    page: int = Field(description="当前页码")
+    page_size: int = Field(description="每页条数")
+    total_pages: int = Field(description="总页数")
 
 
 class HotspotMatchOptions(BaseModel):

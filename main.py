@@ -17,7 +17,7 @@ from app.core.logger import configure_logging
 from app.core.responses import success
 import logging
 from app.db.mysql import engine, db_url
-from app.db.redis import get_redis_client  # 确保返回异步客户端
+from app.db.redis import get_redis_client, close_redis
 from app.models import Base
 
 settings = get_settings()
@@ -40,12 +40,7 @@ async def lifespan(app: FastAPI):
 
     yield  # 应用运行
 
-    # 关闭：安全释放资源
-    await redis_client.close()  # 异步关闭（适配异步客户端）
-    try:
-        await redis_client.connection_pool.disconnect()  # 彻底断开连接池（可选，更安全）
-    except:
-        pass
+    await close_redis()
 
 
 # 初始化 FastAPI

@@ -82,6 +82,15 @@ class ProductOut(BaseModel):
 # 请求结构体
 # ==========================================
 
+class UpdatePriceRequest(BaseModel):
+    """修改价格请求体（适用于商品全量改价和单个 variant 改价）"""
+    price: float = Field(..., gt=0, description="新售价")
+    compare_at_price: Optional[float] = Field(
+        default=None, gt=0,
+        description="可选的原价（划线价），设置后 Shopify 会显示折扣标记",
+    )
+
+
 class GetProductListRequest:
     """商品列表查询参数"""
 

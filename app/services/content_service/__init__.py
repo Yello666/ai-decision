@@ -7,6 +7,8 @@ from .generation_service import (
     create_text_generation,
     create_deprecated_text_record,
     get_generation_by_id,
+    get_generation_by_external_id,
+    handle_video_task_callback,
     list_generations,
     refresh_video_status,
 )
@@ -21,6 +23,8 @@ __all__ = [
     "create_text_generation",
     "create_deprecated_text_record",
     "get_generation_by_id",
+    "get_generation_by_external_id",
+    "handle_video_task_callback",
     "list_generations",
     "refresh_video_status",
 ]

@@ -21,6 +21,7 @@ websockets==14.2
 langchain
 langchain-community
 langchain-openai
+langgraph
 openai
 jiter==0.8.2
 dashscope

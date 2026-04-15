@@ -237,6 +237,7 @@ class CreateVideoTaskResponse(BaseModel):
 
 class VideoTaskContent(BaseModel):
     video_url: Optional[str] = Field(default=None, description="生成的视频 URL")
+    last_frame_url: Optional[str] = Field(default=None, description="视频尾帧图片 URL（return_last_frame=true 时返回）")
 
 
 class VideoTaskUsage(BaseModel):
@@ -256,6 +257,21 @@ class VideoTaskStatusResponse(BaseModel):
     status: str = Field(
         ...,
         description="任务状态: queued / running / succeeded / failed / cancelled",
+    )
+    created_at: Optional[int] = Field(default=None, description="创建时间 (Unix 时间戳)")
+    updated_at: Optional[int] = Field(default=None, description="更新时间 (Unix 时间戳)")
+    content: Optional[VideoTaskContent] = None
+    usage: Optional[VideoTaskUsage] = None
+    error: Optional[VideoTaskError] = None
+
+
+class VideoTaskCallbackRequest(BaseModel):
+    """方舟平台回调请求体，与查询任务 API 返回体结构一致"""
+    id: str = Field(..., description="任务 ID，如 cgt-20250918170228-dw9rb")
+    model: Optional[str] = Field(default=None, description="模型名称-版本")
+    status: str = Field(
+        ...,
+        description="任务状态: queued / running / succeeded / failed / expired",
     )
     created_at: Optional[int] = Field(default=None, description="创建时间 (Unix 时间戳)")
     updated_at: Optional[int] = Field(default=None, description="更新时间 (Unix 时间戳)")

@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _MODEL_TEXT_VIDEO = "ep-20260330165459-vmz9x"
 _MODEL_REF_VIDEO = "ep-20260331152207-2n5zd"
+_CALLBACK_URL = "https://shop-ai.xin/api/v1/generate/callback"
 
 
 def _get_llm_client() -> AsyncOpenAI:
@@ -140,6 +141,7 @@ async def build_seedance_payload(
     payload: Dict[str, Any] = {
         "model": model,
         "content": content,
+        "callback_url": _CALLBACK_URL,
     }
 
     if req.duration is not None:

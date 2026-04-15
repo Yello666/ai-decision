@@ -37,8 +37,6 @@ async def initiate_registration(merchant_in: MerchantCreate) -> str:
         900,
         merchant_in.model_dump_json()
     )
-    await redis.close()
-    
     return get_shopify_auth_url(merchant_in.shopify_domain, state)
 
 async def exchange_code_for_token(shop_domain: str, code: str) -> str:
@@ -66,8 +64,6 @@ async def get_shop_info(shop_domain: str, access_token: str) -> Dict[str, Any]:
 async def complete_registration(db: Session, state: str, code: str, shop_domain: str) -> Merchant:
     redis = get_redis_client()
     data = await redis.get(f"registration:{state}")
-    await redis.close()
-    
     if not data:
         raise ValueError("Invalid or expired state")
     
@@ -124,6 +120,4 @@ async def complete_registration(db: Session, state: str, code: str, shop_domain:
     # Cleanup
     redis = get_redis_client()
     await redis.delete(f"registration:{state}")
-    await redis.close()
-    
     return db_merchant

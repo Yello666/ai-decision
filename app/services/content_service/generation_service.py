@@ -261,6 +261,73 @@ def create_text_generation(
 
 
 # --------------------------
+# 回调处理
+# --------------------------
+def get_generation_by_external_id(db: Session, external_id: str) -> Optional[Generation]:
+    """通过外部任务 ID（火山方舟 task_id）查找 Generation 记录。"""
+    return (
+        db.query(Generation)
+        .filter(Generation.external_id == external_id)
+        .first()
+    )
+
+
+def handle_video_task_callback(
+    db: Session,
+    task_id: str,
+    status: str,
+    video_url: Optional[str] = None,
+    error_message: Optional[str] = None,
+    raw_payload: Optional[dict] = None,
+) -> Optional[Generation]:
+    """
+    处理方舟平台视频任务回调，更新 Generation 记录状态。
+    幂等设计：已处于终态（succeeded/failed/expired）的记录不再更新。
+    """
+    gen = get_generation_by_external_id(db, task_id)
+    if not gen:
+        logger.warning("回调找不到对应的 Generation 记录, task_id=%s", task_id)
+        return None
+
+    terminal_statuses = {"succeeded", "failed", "expired"}
+    if gen.status in terminal_statuses:
+        logger.info(
+            "Generation(id=%s) 已处于终态 '%s'，忽略重复回调 status='%s'",
+            gen.id, gen.status, status,
+        )
+        return gen
+
+    logger.info(
+        "回调更新 Generation(id=%s): %s -> %s, task_id=%s",
+        gen.id, gen.status, status, task_id,
+    )
+    gen.status = status
+
+    if status == "succeeded":
+        if video_url:
+            gen.result_url = video_url
+        logger.info(
+            "任务成功，持久化完整数据: Generation(id=%s), video_url=%s",
+            gen.id, video_url,
+        )
+    elif status == "failed":
+        gen.error_message = error_message or "任务失败"
+        logger.warning(
+            "任务失败: Generation(id=%s), error=%s",
+            gen.id, gen.error_message,
+        )
+    elif status == "expired":
+        gen.error_message = error_message or "任务超时"
+        logger.warning(
+            "任务超时: Generation(id=%s)", gen.id,
+        )
+
+    db.commit()
+    db.refresh(gen)
+    return gen
+
+
+# --------------------------
 # 查询
 # --------------------------
 def get_generation_by_id(db: Session, generation_id: int, shopify_store_id: str) -> Optional[Generation]:

@@ -4,6 +4,7 @@ SeedDance 2.0 API 客户端：视频生成、图片生成、轮询视频状态�
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Optional, Union
 
@@ -193,27 +194,45 @@ async def create_seedance_video_task(payload: dict[str, Any]) -> dict[str, Any]:
     返回 {"id": "cgt-xxx", "status": "submitted"}。
     """
     url = f"{_volcengine_base_url()}/contents/generations/tasks"
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(url, headers=_volcengine_headers(), json=payload)
-    if not resp.is_success:
-        err_detail = resp.text
+    retries = 3
+    for attempt in range(1, retries + 1):
         try:
-            err_detail = resp.json()
-        except Exception:
-            pass
-        logger.error(
-            "Seedance 1.5 Pro create task failed: status=%s body=%s",
-            resp.status_code, err_detail,
-        )
-        resp.raise_for_status()
-    return resp.json()
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(url, headers=_volcengine_headers(), json=payload)
+            if resp.is_success:
+                return resp.json()
+
+            err_detail = resp.text
+            try:
+                err_detail = resp.json()
+            except Exception:
+                pass
+
+            retryable = resp.status_code in {429, 500, 502, 503, 504}
+            logger.error(
+                "Seedance 1.5 Pro create task failed: status=%s body=%s attempt=%s/%s",
+                resp.status_code, err_detail, attempt, retries,
+            )
+            if not retryable or attempt == retries:
+                resp.raise_for_status()
+            await asyncio.sleep(0.5 * (2 ** (attempt - 1)))
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            logger.warning(
+                "Seedance 1.5 Pro create task transient error: %s attempt=%s/%s",
+                type(e).__name__, attempt, retries,
+            )
+            if attempt == retries:
+                raise
+            await asyncio.sleep(0.5 * (2 ** (attempt - 1)))
+
+    raise RuntimeError("Seedance 任务提交失败：超过最大重试次数")
 
 
 async def query_seedance_video_task(task_id: str) -> dict[str, Any]:
     """
     查询视频生成任务状态。
     GET {base_url}/contents/generations/tasks/{id}
-    返回 {model, status, created_at, updated_at, content: {video_url}, usage, error}。
+    返回 {model, status, created_at, updated_at, content: {video_url, last_frame_url}, usage, error}。
     """
     url = f"{_volcengine_base_url()}/contents/generations/tasks/{task_id}"
     async with httpx.AsyncClient(timeout=15) as client:
@@ -230,3 +249,5 @@ async def query_seedance_video_task(task_id: str) -> dict[str, Any]:
         )
         resp.raise_for_status()
     return resp.json()
+
+
