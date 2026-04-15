@@ -19,6 +19,8 @@ from pydantic import AnyHttpUrl, BaseModel, Field
 from app.api.deps import get_current_merchant
 from app.core.responses import success
 from app.models import Merchant
+from app.schemas.hotspot import TrendObject, BrandObject
+from app.schemas.product import ProductObject
 from app.services.video_graph.graph import get_graph
 
 logger = logging.getLogger(__name__)
@@ -45,9 +47,9 @@ class MediaAssetsInput(BaseModel):
 
 
 class CreateThreadRequest(BaseModel):
-    trend: dict = Field(..., description="TrendObject 热点信息")
-    brand: dict = Field(..., description="BrandObject 品牌信息")
-    product: dict = Field(..., description="ProductObject 产品信息")
+    trend: TrendObject = Field(..., description="TrendObject 热点信息")
+    brand: BrandObject = Field(..., description="BrandObject 品牌信息")
+    product: ProductObject = Field(..., description="ProductObject 产品信息")
     user_input: str = Field(default="", description="用户对视频的想法/要求")
     generation_mode: Literal["text_to_video", "image_to_video", "frame_interpolation"] = "text_to_video"
     media_assets: Optional[MediaAssetsInput] = None
