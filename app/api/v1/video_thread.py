@@ -14,7 +14,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from langgraph.types import Command
-from pydantic import AnyHttpUrl, BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 
 from app.api.deps import get_current_merchant
 from app.core.responses import success
@@ -40,10 +40,30 @@ class ConfigParamsInput(BaseModel):
 
 
 class MediaAssetsInput(BaseModel):
-    image_urls: list[AnyHttpUrl] = Field(default_factory=list)
-    ref_image_url: Optional[AnyHttpUrl] = None
-    first_frame_url: Optional[AnyHttpUrl] = None
-    last_frame_url: Optional[AnyHttpUrl] = None
+    """图生视频 / 首尾帧插帧等所需的媒体 URL（与 OpenAPI Schema example 一致）。"""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "ref_image_urls": ["https://example.com/a.jpg"],
+                "first_frame_url": "https://example.com/first.jpg",
+                "last_frame_url": "https://example.com/last.jpg",
+            }
+        }
+    )
+
+    ref_image_urls: list[AnyHttpUrl] = Field(
+        default_factory=list,
+        description="参考图 URL 列表；image_to_video 时建议 1～4 张，纯文生视频可为空列表",
+    )
+    first_frame_url: Optional[AnyHttpUrl] = Field(
+        default=None,
+        description="首帧图 URL（frame_interpolation 等需要首尾帧时使用）",
+    )
+    last_frame_url: Optional[AnyHttpUrl] = Field(
+        default=None,
+        description="尾帧图 URL（frame_interpolation 等需要首尾帧时使用）",
+    )
 
 
 class CreateThreadRequest(BaseModel):
@@ -52,7 +72,13 @@ class CreateThreadRequest(BaseModel):
     product: ProductObject = Field(..., description="ProductObject 产品信息")
     user_input: str = Field(default="", description="用户对视频的想法/要求")
     generation_mode: Literal["text_to_video", "image_to_video", "frame_interpolation"] = "text_to_video"
-    media_assets: Optional[MediaAssetsInput] = None
+    media_assets: Optional[MediaAssetsInput] = Field(
+        default=None,
+        description=(
+            "可选。媒体素材：ref_image_urls 为参考图；first_frame_url / last_frame_url 用于首尾帧。"
+            "完整示例见 MediaAssetsInput 的 Schema example。"
+        ),
+    )
     config_params: Optional[ConfigParamsInput] = None
 
 
@@ -81,14 +107,24 @@ async def create_thread(
     """
     创建视频生成会话，启动 LangGraph 工作流。
     Graph 会执行到 human_interrupt 节点后暂停，等待 resume。
+
+    **media_assets**（可选）建议结构：
+    ```json
+    {
+      "ref_image_urls": ["https://example.com/a.jpg"],
+      "first_frame_url": "https://example.com/first.jpg",
+      "last_frame_url": "https://example.com/last.jpg"
+    }
+    ```
+    纯文生视频可省略 `media_assets`，或仅传空对象/空列表字段。
     """
     thread_id = str(uuid.uuid4())
 
     initial_state = {
         "user_input": payload.user_input,
-        "trend": payload.trend,
-        "brand": payload.brand,
-        "product": payload.product,
+        "trend": payload.trend.model_dump(mode="json"),
+        "brand": payload.brand.model_dump(mode="json"),
+        "product": payload.product.model_dump(mode="json"),
         "generation_mode": payload.generation_mode,
         "media_assets": payload.media_assets.model_dump(mode="json") if payload.media_assets else {},
         "config_params": payload.config_params.model_dump(mode="json") if payload.config_params else {},

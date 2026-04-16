@@ -129,8 +129,8 @@ async def call_script_planner(
     user_msg_parts.append(f"[Default Mode] {mode}")
     user_msg_parts.append(f"[Generate Audio] {generate_audio}")
 
-    if media.get("image_urls"):
-        user_msg_parts.append(f"[Available Images] {media['image_urls']}")
+    if media.get("ref_image_urls"):
+        user_msg_parts.append(f"[Available Images] {media['ref_image_urls']}")
     if media.get("first_frame_url"):
         user_msg_parts.append(f"[First Frame] {media['first_frame_url']}")
 

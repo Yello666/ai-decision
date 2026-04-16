@@ -47,25 +47,23 @@ def parse_intent(state: VideoGenerationState) -> dict[str, Any]:
     merged_config: ConfigParams = {**DEFAULT_CONFIG, **{k: v for k, v in user_config.items() if v is not None}}
 
     if mode in ("image_to_video", "frame_interpolation"):
-        image_urls = media.get("image_urls") or []
-        ref_image_url = media.get("ref_image_url")
+        ref_image_urls = media.get("ref_image_urls") or []
         first_frame_url = media.get("first_frame_url")
         last_frame_url = media.get("last_frame_url")
 
-        has_images = bool(image_urls or ref_image_url or first_frame_url)
+        has_images = bool(ref_image_urls or first_frame_url)
         if not has_images:
             return {
                 "current_step": "error",
                 "error": f"模式 {mode} 需要提供图片 URL，请上传图片后重试。",
             }
     else:
-        image_urls = []
-        ref_image_url = None
+        ref_image_urls = []
         first_frame_url = None
         last_frame_url = None
 
     parsed_media = {
-        "image_urls": image_urls if image_urls else ([ref_image_url] if ref_image_url else []),
+        "ref_image_urls": ref_image_urls,
         "first_frame_url": first_frame_url or "",
         "last_frame_url": last_frame_url or "",
     }
