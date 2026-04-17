@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     # -------- 热点缓存配置 --------
     HOT_TRENDS_LOGICAL_TTL_SECONDS: int = 600 #10分钟更新1次
     PRELOADING_HOT_TRENDS: bool = False
+    # 单热点 LLM 分析结果缓存：命中则直接复用，不再调用大模型
+    HOT_TRENDS_ANALYSIS_CACHE_TTL_SECONDS: int = 7 * 24 * 3600  # 7 天
+    # 模型/Prompt 升级时修改此版本号即可让历史分析结果失效
+    HOT_TRENDS_ANALYSIS_VERSION: str = "v1"
 
     LOG_LEVEL: str = "INFO"
 

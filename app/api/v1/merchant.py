@@ -6,7 +6,7 @@ from app.db.mysql import get_db
 from app.schemas.hotspot import BrandObject, BrandUpdate
 from app.schemas.merchant import MerchantOut
 from app.models import Merchant, Brand
-from app.services.merchant_service import create_or_update_brand
+from app.services.merchant_service import create_or_update_brand, get_brand_by_merchant_id
 
 router = APIRouter(prefix="/merchant", tags=["merchant"])
 
@@ -16,6 +16,23 @@ router = APIRouter(prefix="/merchant", tags=["merchant"])
 def get_info(current_merchant: Merchant = Depends(get_current_merchant)):
     return success(MerchantOut.model_validate(current_merchant))
 # 获取品牌信息
+@router.get("/brand-info")
+def get_brand_info(
+        current_merchant: Merchant = Depends(get_current_merchant),
+        db: Session = Depends(get_db)
+):
+    brand = get_brand_by_merchant_id(db, current_merchant.id)
+    if not brand:
+        return success(None, message="brand_not_set")
+
+    res = BrandObject(
+        name=brand.name,
+        core_value=brand.core_value,
+        industry=brand.industry,
+        tone=brand.tone,
+        audience=brand.audience.split(",") if brand.audience else []
+    )
+    return success(res)
 
 
 

@@ -8,6 +8,10 @@ from app.schemas.hotspot import (
     SentimentCN,
     CollectTrendObject
 )
+from app.services.hostpot_service.analysis_cache import (
+    mget_analysis,
+    set_analysis_many,
+)
 from app.services.trending_service import get_youtube_trends
 from app.services.trending_service.get_youtube_trends import get_trending_videos_async
 
@@ -26,6 +30,9 @@ BATCH_SIZE = 10
 async def collect_and_format_hot_data_async(platforms: List[str], max_results: int = 5) -> List[CollectTrendObject]:
     """
     异步采集+清洗热点数据：按平台拉取并用 LLM 分析，返回 CollectTrendObject 列表。
+
+    单热点去重：先查 Redis 中"该热点的历史分析结果"，命中直接复用；
+    只对未命中的热点并行批量调用 LLM，新结果写回缓存。
     """
     result: List[CollectTrendObject] = []
     platform_list = platforms if platforms else ["youtube"]
@@ -34,85 +41,71 @@ async def collect_and_format_hot_data_async(platforms: List[str], max_results: i
             continue
         youtube_trend_list = await get_trending_videos_async(max_results)
         process_list = youtube_trend_list[:max_results]
-        batches = [process_list[i:i + BATCH_SIZE] for i in range(0, len(process_list), BATCH_SIZE)]
-        batch_payloads = [
-            [
-                {"id": item.id, "title": item.title, "summary": item.summary, "tags": item.tags}
-                for item in batch
-            ]
-            for batch in batches
-        ]
-        batch_results_list = await asyncio.gather(
-            *[_analyze_with_llm_async(payload) for payload in batch_payloads],
-            return_exceptions=True,
+        if not process_list:
+            continue
+
+        hit_map, miss_items = await mget_analysis(process_list)
+        logger.info(
+            "热点分析缓存 平台=%s 总数=%d 命中=%d 未命中=%d",
+            platform, len(process_list), len(hit_map), len(miss_items),
         )
-        for idx, (batch, batch_results) in enumerate(zip(batches, batch_results_list)):
-            if isinstance(batch_results, Exception):
-                logger.warning("Batch LLM analysis raised exception at batch index %d: %s", idx, batch_results)
-                continue
-            if not batch_results or "results" not in batch_results:
-                logger.warning("Batch LLM analysis failed or returned empty at batch index %d", idx)
-                continue
-            results_list = batch_results["results"]
-            res_map = {res["id"]: res for res in results_list if "id" in res}
-            for item in batch:
-                analysis_res = res_map.get(item.id)
-                if not analysis_res:
-                    continue
-                if analysis_res.get("risk_category") == "RED_LINE" or not analysis_res.get("is_safe_for_marketing"):
-                    logger.info("Skipping unsafe content: %s (Reason: %s)", item.title, analysis_res.get('risk_category'))
-                    continue
-                item.summary = analysis_res.get("summary", item.summary)
-                item.tags = analysis_res.get("tags", item.tags)
-                item.sentiment_label = _map_sentiment(analysis_res.get("sentiment_label", "中性"))
-                item.sentiment_score = analysis_res.get("sentiment_score", 0.0)
-                item.risk_category = analysis_res.get("risk_category")
-                item.warning_message = analysis_res.get("warning_message")
-                if item.view_count == 0 and item.likes == 0:
-                    item.warning_message = "暂无更多信息，建议前往平台进行搜索。"
-                item.audience = analysis_res.get("audience", [])
-                result.append(item)
-    return result
 
-
-# 采集+清洗数据（同步，保留兼容）
-def collect_and_format_hot_data(platforms: str, max_results: int = 5) -> List[CollectTrendObject]:
-    result: List[CollectTrendObject] = []
-    
-    if platforms == "youtube":
-        youtube_trend_list: List[CollectTrendObject] = get_youtube_trends.get_trending_videos(max_results)
-        process_list = youtube_trend_list[:max_results]
-        for i in range(0, len(process_list), BATCH_SIZE):
-            batch = process_list[i:i + BATCH_SIZE]
-            analysis_inputs = [
-                {"id": item.id, "title": item.title, "summary": item.summary, "tags": item.tags}
-                for item in batch
+        new_analysis_map: Dict[str, Dict[str, Any]] = {}
+        if miss_items:
+            batches = [miss_items[i:i + BATCH_SIZE] for i in range(0, len(miss_items), BATCH_SIZE)]
+            batch_payloads = [
+                [
+                    {"id": item.id, "title": item.title, "summary": item.summary, "tags": item.tags}
+                    for item in batch
+                ]
+                for batch in batches
             ]
-            batch_results = _analyze_with_llm(analysis_inputs)
-            if not batch_results or "results" not in batch_results:
-                logger.warning("Batch LLM analysis failed or returned empty for batch starting at %d", i)
+            batch_results_list = await asyncio.gather(
+                *[_analyze_with_llm_async(payload) for payload in batch_payloads],
+                return_exceptions=True,
+            )
+            for idx, batch_results in enumerate(batch_results_list):
+                if isinstance(batch_results, Exception):
+                    logger.warning("Batch LLM analysis raised exception at batch index %d: %s", idx, batch_results)
+                    continue
+                if not batch_results or "results" not in batch_results:
+                    logger.warning("Batch LLM analysis failed or returned empty at batch index %d", idx)
+                    continue
+                for res in batch_results["results"]:
+                    rid = res.get("id")
+                    if rid:
+                        new_analysis_map[rid] = res
+
+            if new_analysis_map:
+                await set_analysis_many(miss_items, new_analysis_map)
+
+        for item in process_list:
+            analysis_res = hit_map.get(item.id) or new_analysis_map.get(item.id)
+            if not analysis_res:
                 continue
-            results_list = batch_results["results"]
-            res_map = {res["id"]: res for res in results_list if "id" in res}
-            for item in batch:
-                analysis_res = res_map.get(item.id)
-                if not analysis_res:
-                    continue
-                if analysis_res.get("risk_category") == "RED_LINE" or not analysis_res.get("is_safe_for_marketing"):
-                    logger.info("Skipping unsafe content: %s (Reason: %s)", item.title, analysis_res.get('risk_category'))
-                    continue
-                item.summary = analysis_res.get("summary", item.summary)
-                item.tags = analysis_res.get("tags", item.tags)
-                item.sentiment_label = _map_sentiment(analysis_res.get("sentiment_label", "中性"))
-                item.sentiment_score = analysis_res.get("sentiment_score", 0.0)
-                item.risk_category = analysis_res.get("risk_category")
-                item.warning_message = analysis_res.get("warning_message")
-                if item.view_count == 0 and item.likes == 0:
-                    item.warning_message = "暂无更多信息，建议前往平台进行搜索。"
-                item.audience = analysis_res.get("audience", [])
+            if _apply_analysis_to_item(item, analysis_res):
                 result.append(item)
     return result
 
+
+def _apply_analysis_to_item(item: CollectTrendObject, analysis_res: Dict[str, Any]) -> bool:
+    """把 LLM 分析结果应用到 item。命中红线/不安全则跳过，返回 False。"""
+    if analysis_res.get("risk_category") == "RED_LINE" or not analysis_res.get("is_safe_for_marketing"):
+        logger.info(
+            "Skipping unsafe content: %s (Reason: %s)",
+            item.title, analysis_res.get("risk_category"),
+        )
+        return False
+    item.summary = analysis_res.get("summary", item.summary)
+    item.tags = analysis_res.get("tags", item.tags)
+    item.sentiment_label = _map_sentiment(analysis_res.get("sentiment_label", "中性"))
+    item.sentiment_score = analysis_res.get("sentiment_score", 0.0)
+    item.risk_category = analysis_res.get("risk_category")
+    item.warning_message = analysis_res.get("warning_message")
+    if item.view_count == 0 and item.likes == 0:
+        item.warning_message = "暂无更多信息，建议前往平台进行搜索。"
+    item.audience = analysis_res.get("audience", [])
+    return True
 
 def _build_analysis_prompt(content_list: List[Dict[str, Any]]) -> str:
     return f"""
