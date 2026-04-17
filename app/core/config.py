@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # -------- 本地开发开关 --------
     # True  → 使用下方 _LOCAL_* 的虚拟机地址（忽略 .env 中的数据库/Redis 配置）
     # False → 使用 .env 中的云数据库配置（部署时设为 False）
-    LOCAL_DEV: bool = True
+    LOCAL_DEV: bool = False
 
 
     PROJECT_NAME: str = "AI Decision Platform"
