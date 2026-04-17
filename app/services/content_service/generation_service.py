@@ -35,7 +35,7 @@ def get_brand_for_store(
     return BrandObject(
         name=brand.name,
         core_value=brand.core_value or None,
-        industry=brand.industry,
+        mainly_sold_products=brand.mainly_sold_products,
         tone=brand.tone,
         audience=brand.audience.split(",") if brand.audience else None,
     )
