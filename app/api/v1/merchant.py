@@ -28,7 +28,7 @@ def get_brand_info(
     res = BrandObject(
         name=brand.name,
         core_value=brand.core_value,
-        industry=brand.industry,
+        mainly_sold_products=brand.mainly_sold_products,
         tone=brand.tone,
         audience=brand.audience.split(",") if brand.audience else []
     )
@@ -51,7 +51,7 @@ def set_brand_info(
     res = BrandObject(
         name=brand.name,
         core_value=brand.core_value,
-        industry=brand.industry,
+        mainly_sold_products=brand.mainly_sold_products,
         tone=brand.tone,
         audience=brand.audience.split(",") if brand.audience else []
     )
@@ -72,7 +72,7 @@ def update_brand_info(
     res = BrandObject(
         name=brand.name,
         core_value=brand.core_value,
-        industry=brand.industry,
+        mainly_sold_products=brand.mainly_sold_products,
         tone=brand.tone,
         audience=brand.audience.split(",") if brand.audience else []
     )

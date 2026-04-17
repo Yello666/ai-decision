@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     # 模型/Prompt 升级时修改此版本号即可让历史分析结果失效
     HOT_TRENDS_ANALYSIS_VERSION: str = "v1"
 
+    # (品牌, 热点) 匹配度缓存：同一品牌-热点组合只计算一次
+    HOT_TRENDS_MATCH_CACHE_TTL_SECONDS: int = 7 * 24 * 3600  # 7 天
+    HOT_TRENDS_MATCH_VERSION: str = "v1"
+
     LOG_LEVEL: str = "INFO"
 
     # 允许的前端域名：在有cookie和Authorization请求头的时候需要具体域名，在这里配置即可。其余时候不会使用这里的域名

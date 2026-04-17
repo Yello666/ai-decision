@@ -63,11 +63,7 @@ class BrandObject(BaseModel):
 
     name: str = Field(..., description="品牌名称")
     core_value: Optional[str] = Field(default=None, description="品牌Slogan/核心价值/品牌介绍")
-    mainly_sold_products: str = Field(
-        ...,
-        description="主要售卖商品品类",
-        alias="industry",
-    )
+    mainly_sold_products: str = Field(...,description="主要售卖商品品类",)
     tone: str = Field(..., description="品牌风格（年轻/高端/搞怪/严谨等）")
     audience: Optional[List[str]] = Field(default=None, description="品牌目标受众（可选）")
 
@@ -147,6 +143,13 @@ class HotspotMatchOptions(BaseModel):
 class HotspotMatchRequest(BaseModel):
     trend: TrendObject
     brand: BrandObject
+    options: HotspotMatchOptions = Field(default_factory=HotspotMatchOptions)
+
+
+class HotspotBatchMatchRequest(BaseModel):
+    """批量热点匹配请求：品牌信息由服务端按当前登录商户从 DB 加载，无需前端传入。"""
+
+    trends: List[TrendObject] = Field(..., description="待分析的热点列表")
     options: HotspotMatchOptions = Field(default_factory=HotspotMatchOptions)
 
 
