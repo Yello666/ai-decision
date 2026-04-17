@@ -14,11 +14,13 @@ from app.core.exceptions import (
     validation_exception_handler,
 )
 from app.core.logger import configure_logging
+from app.core.hot_trends_cache import preload_hot_trends_cache
 from app.core.responses import success
 import logging
 from app.db.mysql import engine, db_url
 from app.db.redis import get_redis_client, close_redis
 from app.models import Base
+from app.services.hostpot_service.collect_hostspot import collect_and_format_hot_data_async
 
 settings = get_settings()
 configure_logging()
@@ -37,6 +39,13 @@ async def lifespan(app: FastAPI):
         await redis_client.ping()  # 异步 ping（适配异步客户端）
     except Exception as e:
         print(f"Redis ping failed (might be mock): {e}")
+
+    if settings.PRELOADING_HOT_TRENDS:
+        try:
+            await preload_hot_trends_cache(loader=collect_and_format_hot_data_async)
+            logger.info("热点预加载完成")
+        except Exception:
+            logger.exception("热点预加载失败")
 
     yield  # 应用运行
 

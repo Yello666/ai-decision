@@ -27,7 +27,11 @@ from pydantic import SecretStr
 from app.core.config import get_settings
 from app.models import Merchant
 from app.schemas.pricing import PricingAnalysisResponseLLM
-from app.services.product_service import fetch_product, update_product_prices
+from app.services.product_service import (
+    fetch_product,
+    update_product_prices,
+    update_variant_price,
+)
 from app.skills import load_skill
 from app.skills.fetch_competitor_info.handler import fetch_competitor_info
 
@@ -79,22 +83,66 @@ async def get_products_info(merchant: Merchant, product_ids: List[int]):
 # Context builder (consumes standardized competitor data)
 # ---------------------------------------------------------------------------
 
-def _build_products_context(products, competitor_data) -> str:
-    """Render product + competitor info as text for the LLM.
+def _resolve_selection(product, variant_id: int | None):
+    """根据 selection 得到用于上下文展示与调价的标签、当前价、variant 信息。
+
+    Returns ``(label, current_price, variant_name_or_none)``。
+    - variant_id 为空：按商品维度（所有 variant 统一调价）。
+    - variant_id 指定：按该 variant 当前价展示。
+    """
+    if variant_id and product.variants:
+        for v in product.variants:
+            if v.variant_id == variant_id:
+                return (f"{product.name} — {v.name}", float(v.price), v.name)
+    return (product.name, float(product.price), None)
+
+
+def _build_selection_meta(
+    selections: List[Dict[str, Any]],
+    products: List[Any],
+) -> List[Dict[str, Any]]:
+    """为每个 selection 生成 LLM 上下文所需的元数据。
+
+    每项包含：label（LLM 识别用）、product_id、variant_id、base_product_name（用于匹配 competitor_data）。
+    """
+    product_map = {p.product_id: p for p in products}
+    meta: List[Dict[str, Any]] = []
+    for sel in selections:
+        product = product_map.get(sel["product_id"])
+        if product is None:
+            continue
+        label, current_price, variant_name = _resolve_selection(product, sel.get("variant_id"))
+        meta.append({
+            "label": label,
+            "product_id": sel["product_id"],
+            "variant_id": sel.get("variant_id"),
+            "variant_name": variant_name,
+            "current_price": current_price,
+            "base_product_name": product.name,
+        })
+    return meta
+
+
+def _build_products_context(selection_meta, products, competitor_data) -> str:
+    """Render product/variant + competitor info as text for the LLM.
 
     ``competitor_data`` uses the **standardized** format produced by
-    ``fetch_competitor_info``: each value is a list of dicts with keys
-    ``title, price, store, url, old_price, rating, reviews``.
+    ``fetch_competitor_info`` and is keyed by base product name.
     """
+    product_map = {p.product_id: p for p in products}
     sections: list[str] = []
-    for product in products:
+    for meta in selection_meta:
+        product = product_map.get(meta["product_id"])
+        if product is None:
+            continue
+
         stock = (
             f"In Stock: {product.inventory} units"
             if product.inventory > 20
             else f"Low Stock: {product.inventory} units"
         )
 
-        competitors = competitor_data.get(product.name, [])
+        competitors = competitor_data.get(meta["base_product_name"], [])
         if competitors:
             prices = [c["price"] for c in competitors]
             avg_price = sum(prices) / len(prices)
@@ -111,10 +159,21 @@ def _build_products_context(products, competitor_data) -> str:
             comp_summary = "No competitor data available"
             comp_lines = "    (none)"
 
+        variant_line = ""
+        if meta.get("variant_id"):
+            variant_line = (
+                f"  Variant ID: {meta['variant_id']}\n"
+                f"  Variant: {meta.get('variant_name') or ''}\n"
+                f"  Pricing Scope: only this variant\n"
+            )
+        else:
+            variant_line = "  Pricing Scope: all variants of this product\n"
+
         sections.append(
-            f"Product: {product.name}\n"
+            f"Product: {meta['label']}\n"
             f"  Product ID: {product.product_id}\n"
-            f"  Current Price: ${product.price:.2f}\n"
+            f"{variant_line}"
+            f"  Current Price: ${meta['current_price']:.2f}\n"
             f"  Stock Status: {stock}\n"
             f"  Competitor Summary: {comp_summary}\n"
             f"  Competitor Details:\n{comp_lines}"
@@ -129,12 +188,21 @@ def _build_products_context(products, competitor_data) -> str:
 def _enrich_with_urls(
     llm_result: Dict[str, Any],
     competitor_data: Dict[str, List[Dict[str, Any]]],
+    selection_meta: List[Dict[str, Any]] | None = None,
 ) -> Dict[str, Any]:
-    """Add ``competitor_info_url`` to each analysis item from raw competitor data."""
+    """Add ``competitor_info_url`` to each analysis item from raw competitor data.
+
+    当 LLM 输出的 ``product_name`` 是 variant label（例如 "Foo — M/Red"）时，
+    通过 ``selection_meta`` 映射回 base product name 来查找 competitor URL。
+    """
+    label_to_base = {
+        m["label"]: m["base_product_name"] for m in (selection_meta or [])
+    }
     items = llm_result.get("pricing_analysis", [])
     for item in items:
         name = item.get("product_name", "")
-        competitors = competitor_data.get(name, [])
+        base_name = label_to_base.get(name, name)
+        competitors = competitor_data.get(base_name, [])
         item["competitor_info_url"] = [
             c["url"] for c in competitors if c.get("url")
         ]
@@ -160,11 +228,15 @@ class PricingGraphState(TypedDict, total=False):
 
     # 输入（merchant_info 是可序列化的 dict，避免 SQLAlchemy ORM 对象无法被 checkpointer 序列化）
     merchant_info: Dict[str, Any]
-    product_ids: List[int]
+    # selections: [{"product_id": int, "variant_id": Optional[int]}]
+    # - variant_id=None → 商品全量调价（所有 variant）
+    # - variant_id=<id> → 仅对该 variant 调价
+    selections: List[Dict[str, Any]]
     thread_id: str  # 用于 checkpointer 标识会话
 
     # 节点填充
     products: List[Any]
+    selection_meta: List[Dict[str, Any]]  # 每个 selection 的上下文元数据
     competitor_data: Dict[str, List[Dict[str, Any]]]
     pricing_rules: str
     result: Dict[str, Any]  # LLM + enrich 后的完整分析结果
@@ -187,12 +259,20 @@ async def _node_fetch_products(state: PricingGraphState) -> dict[str, Any]:
     """1. fetch_products：搜索商家自身的商品信息，可以从redis中获取，填到state的products里面。
 
     当前实现从 Shopify API 获取，支持后续扩展 Redis 缓存（类似 competitor 的机制）。
+    同时根据 selections 构造 selection_meta，为每个 (product, variant) 选项生成 LLM 识别标签。
     """
     merchant = _restore_merchant(state["merchant_info"])
-    product_ids = state["product_ids"]
-    logger.info("Graph: fetching product info for %d products", len(product_ids))
-    products = await get_products_info(merchant, product_ids)
-    return {"products": products}
+    selections = state["selections"]
+    # 去重 product_id，避免同一商品被多次请求（同商品不同 variant 只需取一次产品详情）
+    unique_product_ids = list(dict.fromkeys(s["product_id"] for s in selections))
+    logger.info(
+        "Graph: fetching product info for %d products (selections=%d)",
+        len(unique_product_ids),
+        len(selections),
+    )
+    products = await get_products_info(merchant, unique_product_ids)
+    selection_meta = _build_selection_meta(selections, products)
+    return {"products": products, "selection_meta": selection_meta}
 
 
 async def _node_fetch_competitors(state: PricingGraphState) -> dict[str, Any]:
@@ -254,6 +334,7 @@ async def _node_llm_analyze(state: PricingGraphState) -> dict[str, Any]:
     chain = prompt | _get_llm() | parser
 
     products_context = _build_products_context(
+        state.get("selection_meta", []),
         state["products"],
         state["competitor_data"],
     )
@@ -268,7 +349,11 @@ async def _node_llm_analyze(state: PricingGraphState) -> dict[str, Any]:
 
 def _node_enrich(state: PricingGraphState) -> dict[str, Any]:
     """5. enrich节点：用于调整输出结果的。给用户返回的json需要包含竟品链接url，大模型的输出不会包括这个，需要后续补充。"""
-    enriched = _enrich_with_urls(state["result"], state["competitor_data"])
+    enriched = _enrich_with_urls(
+        state["result"],
+        state["competitor_data"],
+        state.get("selection_meta", []),
+    )
     return {"result": enriched}
 
 
@@ -298,37 +383,53 @@ def _human_review_node(state: PricingGraphState) -> dict[str, Any]:
 
 
 async def _node_apply(state: PricingGraphState) -> dict[str, Any]:
-    """Approve 后执行：调用 Shopify GraphQL API 将 LLM 推荐价格写入 Shopify。"""
+    """Approve 后执行：调用 Shopify GraphQL API 将 LLM 推荐价格写入 Shopify。
+
+    根据 ``selection_meta`` 决定调价粒度：
+    - 若 selection 指定了 ``variant_id`` → 调用 ``update_variant_price`` 只改该 variant；
+    - 否则 → 调用 ``update_product_prices`` 对该商品所有 variant 统一改价（原行为）。
+    """
     from datetime import datetime, timezone
 
     logger.info("Graph: apply - updating prices on Shopify")
 
     merchant = _restore_merchant(state["merchant_info"])
     products = state.get("products", [])
+    selection_meta = state.get("selection_meta", [])
     result = state.get("result", {})
     analysis_items = result.get("pricing_analysis", [])
 
-    product_map = {p.name: p for p in products}
+    product_by_id = {p.product_id: p for p in products}
+    # LLM 输出的 product_name 对应 selection label；通过 label → meta 做映射
+    meta_by_label = {m["label"]: m for m in selection_meta}
 
     applied: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
 
     for item in analysis_items:
-        product_name = item.get("product_name", "")
+        label = item.get("product_name", "")
         recommended_price = item.get("recommended_price")
         current_price = item.get("current_price")
-        product = product_map.get(product_name)
 
-        if not product or recommended_price is None:
-            errors.append({"product_name": product_name, "error": "product_not_found_or_no_price"})
+        meta = meta_by_label.get(label)
+        if meta is None:
+            errors.append({"product_name": label, "error": "selection_meta_not_found"})
             continue
+
+        product = product_by_id.get(meta["product_id"])
+        if product is None or recommended_price is None:
+            errors.append({"product_name": label, "error": "product_not_found_or_no_price"})
+            continue
+
+        variant_id = meta.get("variant_id")
 
         # 推荐价格和当前价格一致时跳过
         if current_price is not None and abs(recommended_price - current_price) < 0.01:
-            logger.info("Skipping %s: recommended price equals current price", product_name)
+            logger.info("Skipping %s: recommended price equals current price", label)
             applied.append({
-                "product_name": product_name,
+                "product_name": label,
                 "product_id": product.product_id,
+                "variant_id": variant_id,
                 "old_price": current_price,
                 "new_price": recommended_price,
                 "skipped": True,
@@ -336,24 +437,55 @@ async def _node_apply(state: PricingGraphState) -> dict[str, Any]:
             continue
 
         try:
-            compare_at = current_price if (current_price and recommended_price < current_price) else None
-            await update_product_prices(
-                merchant,
-                product.product_id,
-                recommended_price,
-                compare_at_price=compare_at,
+            compare_at = (
+                current_price
+                if (current_price and recommended_price < current_price)
+                else None
             )
+            if variant_id:
+                await update_variant_price(
+                    merchant,
+                    product.product_id,
+                    variant_id,
+                    recommended_price,
+                    compare_at_price=compare_at,
+                )
+                logger.info(
+                    "Updated variant %d of product %d (%s): $%.2f → $%.2f",
+                    variant_id, product.product_id, label,
+                    current_price or 0, recommended_price,
+                )
+            else:
+                await update_product_prices(
+                    merchant,
+                    product.product_id,
+                    recommended_price,
+                    compare_at_price=compare_at,
+                )
+                logger.info(
+                    "Updated all variants of product %d (%s): $%.2f → $%.2f",
+                    product.product_id, label,
+                    current_price or 0, recommended_price,
+                )
             applied.append({
-                "product_name": product_name,
+                "product_name": label,
                 "product_id": product.product_id,
+                "variant_id": variant_id,
                 "old_price": current_price,
                 "new_price": recommended_price,
                 "skipped": False,
             })
-            logger.info("Updated %s (ID %d): $%.2f → $%.2f", product_name, product.product_id, current_price or 0, recommended_price)
         except Exception as exc:
-            logger.error("Failed to update price for %s (ID %d): %s", product_name, product.product_id, exc)
-            errors.append({"product_name": product_name, "product_id": product.product_id, "error": str(exc)})
+            logger.error(
+                "Failed to update price for %s (product_id=%d, variant_id=%s): %s",
+                label, product.product_id, variant_id, exc,
+            )
+            errors.append({
+                "product_name": label,
+                "product_id": product.product_id,
+                "variant_id": variant_id,
+                "error": str(exc),
+            })
 
     result["status"] = "approved_and_applied"
     result["applied_products"] = applied
@@ -443,7 +575,7 @@ _pricing_graph = _build_pricing_graph()
 
 async def run_pricing_analysis(
     merchant: Merchant,
-    product_ids: List[int],
+    selections: List[Dict[str, Any]],
     thread_id: str | None = None,
     command: Command | None = None,
     feedback: str | None = None,
@@ -452,9 +584,13 @@ async def run_pricing_analysis(
 
     - 首次调用：thread_id=None，执行到 human_review 触发 interrupt。
     - 后续 callback：传入 command=Command(resume=...) 或具体指令，系统根据 Command 路由。
+
+    ``selections`` 形如 ``[{"product_id": 123, "variant_id": 456 | None}, ...]``。
+    当 ``variant_id`` 为 None 时，对该商品所有 variant 统一调价；
+    否则只对该 variant 调价。
     """
     if not thread_id:
-        thread_id = f"pricing-{merchant.id}-{hash(str(product_ids)) % 10000}"
+        thread_id = f"pricing-{merchant.id}-{hash(str(selections)) % 10000}"
 
     config = {"configurable": {"thread_id": thread_id}}
 
@@ -469,17 +605,18 @@ async def run_pricing_analysis(
 
     input_state: Dict[str, Any] = {
         "merchant_info": merchant_info,
-        "product_ids": product_ids,
+        "selections": selections,
         "thread_id": thread_id,
     }
     if feedback:
         input_state["feedback"] = feedback
 
     logger.info(
-        "Starting pricing graph for merchant %s (ID: %s), thread=%s, command=%s",
+        "Starting pricing graph for merchant %s (ID: %s), thread=%s, selections=%s, command=%s",
         merchant.name,
         merchant.id,
         thread_id,
+        selections,
         getattr(command, "resume", None) if command else None,
     )
 

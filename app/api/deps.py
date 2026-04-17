@@ -1,18 +1,36 @@
-from fastapi import Depends, HTTPException
+from typing import Optional
+
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
 from sqlalchemy.orm import Session
+
+from app.core.config import get_settings
 from app.core.security import decode_access_token
 from app.db.mysql import get_db
 from app.services.merchant_service import get_merchant_by_store_id
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+# auto_error=False：允许请求不带 Authorization 头，改由 cookie 提供 access token。
+# tokenUrl 保持不变，供 OpenAPI / Swagger 调试沿用旧的 OAuth2 流程。
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
+
+
+def _extract_access_token(request: Request, bearer_token: Optional[str]) -> Optional[str]:
+    """按优先级提取 access token：Cookie → Authorization Bearer（兼容过渡期）。"""
+    settings = get_settings()
+    cookie_token = request.cookies.get(settings.ACCESS_COOKIE_NAME)
+    return cookie_token or bearer_token
 
 
 def get_current_merchant(
-    token: str = Depends(oauth2_scheme),
+    request: Request,
+    bearer_token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ):
+    token = _extract_access_token(request, bearer_token)
+    if not token:
+        raise HTTPException(status_code=401, detail="not_authenticated")
+
     try:
         payload = decode_access_token(token)
         if payload.get("type") != "access":

@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import asyncio
 from typing import List, Dict, Any
 from openai import OpenAI, AsyncOpenAI
 from app.schemas.hotspot import (
@@ -33,15 +34,24 @@ async def collect_and_format_hot_data_async(platforms: List[str], max_results: i
             continue
         youtube_trend_list = await get_trending_videos_async(max_results)
         process_list = youtube_trend_list[:max_results]
-        for i in range(0, len(process_list), BATCH_SIZE):
-            batch = process_list[i:i + BATCH_SIZE]
-            analysis_inputs = [
+        batches = [process_list[i:i + BATCH_SIZE] for i in range(0, len(process_list), BATCH_SIZE)]
+        batch_payloads = [
+            [
                 {"id": item.id, "title": item.title, "summary": item.summary, "tags": item.tags}
                 for item in batch
             ]
-            batch_results = await _analyze_with_llm_async(analysis_inputs)
+            for batch in batches
+        ]
+        batch_results_list = await asyncio.gather(
+            *[_analyze_with_llm_async(payload) for payload in batch_payloads],
+            return_exceptions=True,
+        )
+        for idx, (batch, batch_results) in enumerate(zip(batches, batch_results_list)):
+            if isinstance(batch_results, Exception):
+                logger.warning("Batch LLM analysis raised exception at batch index %d: %s", idx, batch_results)
+                continue
             if not batch_results or "results" not in batch_results:
-                logger.warning("Batch LLM analysis failed or returned empty for batch starting at %d", i)
+                logger.warning("Batch LLM analysis failed or returned empty at batch index %d", idx)
                 continue
             results_list = batch_results["results"]
             res_map = {res["id"]: res for res in results_list if "id" in res}

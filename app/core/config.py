@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # -------- 本地开发开关 --------
     # True  → 使用下方 _LOCAL_* 的虚拟机地址（忽略 .env 中的数据库/Redis 配置）
     # False → 使用 .env 中的云数据库配置（部署时设为 False）
-    LOCAL_DEV: bool = False
+    LOCAL_DEV: bool = True
 
 
     PROJECT_NAME: str = "AI Decision Platform"
@@ -57,6 +57,8 @@ class Settings(BaseSettings):
             self.REDIS_HOST = self._LOCAL_REDIS_HOST
             self.REDIS_PASSWORD = self._LOCAL_REDIS_PASSWORD
             self.SHOPIFY_REDIRECT_URI=self._LOCAL_SHOPIFY_REDIRECT_URL
+            # 本地 HTTP 开发：Secure cookie 不会在 http 下发送
+            self.COOKIE_SECURE = False
         return self
 
 
@@ -68,8 +70,19 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080  # 60 * 24 * 7
 
-    LOG_LEVEL: str = "INFO"
+    # -------- Cookie 会话配置 --------
+    # 用于 HttpOnly cookie 鉴权；跨站点前后端部署时需要 SAMESITE="none" + SECURE=True。
+    COOKIE_SECURE: bool = True
+    COOKIE_SAMESITE: str = "lax"  # lax | strict | none
+    COOKIE_DOMAIN: Optional[str] = None
+    ACCESS_COOKIE_NAME: str = "access_token"
+    REFRESH_COOKIE_NAME: str = "refresh_token"
 
+    # -------- 热点缓存配置 --------
+    HOT_TRENDS_LOGICAL_TTL_SECONDS: int = 600 #10分钟更新1次
+    PRELOADING_HOT_TRENDS: bool = False
+
+    LOG_LEVEL: str = "INFO"
 
     # 允许的前端域名：在有cookie和Authorization请求头的时候需要具体域名，在这里配置即可。其余时候不会使用这里的域名
     #多个域名使用,分隔

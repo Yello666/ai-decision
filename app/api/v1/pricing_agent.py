@@ -1,8 +1,8 @@
 import logging
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from langgraph.types import Command
 
 from app.api.deps import get_current_merchant
@@ -15,15 +15,49 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/pricing-agent", tags=["pricing-agent"])
 
 
-class PricingAgentRequest(BaseModel):
-    """动态调价分析请求体。"""
+class ProductSelection(BaseModel):
+    """单个商品的调价目标。
 
-    product_ids: List[int] = Field(
-        ...,
+    - 仅传 ``product_id``：对该商品下所有 variant 统一调价（原有行为）。
+    - 同时传 ``variant_id``：只对该 variant 调价。
+    """
+
+    product_id: int = Field(..., description="Shopify product ID")
+    variant_id: Optional[int] = Field(
+        default=None,
+        description="可选的 Shopify variant ID；指定后只对该 variant 调价",
+    )
+
+
+class PricingAgentRequest(BaseModel):
+    """动态调价分析请求体。
+
+    每个条目支持 per-variant 选择：
+    - 只传 ``product_id`` → 对该商品所有 variant 统一调价；
+    - 同时传 ``variant_id`` → 只对该 variant 调价。
+    """
+
+    products: Optional[List[ProductSelection]] = Field(
+        default=None,
         min_length=1,
         max_length=5,
-        description="用户选择的 Shopify product ID 列表（最多 5 个）",
+        description="用户选择的商品（及可选的 variant）列表，最多 5 个",
     )
+
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "PricingAgentRequest":
+        if not self.products:
+            raise ValueError("必须提供 products")
+        return self
+
+    @property
+    def selections(self) -> List[dict]:
+        """Return normalized selections as plain dicts for service layer."""
+        return [
+            {"product_id": s.product_id, "variant_id": s.variant_id}
+            for s in (self.products or [])
+        ]
 
 
 class PricingReviewCommand(BaseModel):
@@ -41,26 +75,27 @@ async def analyze_pricing(
     merchant: Merchant = Depends(get_current_merchant),
 ):
     """首次启动定价分析，运行至 human_review 触发 interrupt。"""
+    selections = payload.selections
     logger.info(
-        "Pricing Analysis Request - Merchant: %s (ID: %s), Products: %s",
+        "Pricing Analysis Request - Merchant: %s (ID: %s), Selections: %s",
         merchant.name,
         merchant.id,
-        payload.product_ids,
+        selections,
     )
 
     try:
-        result = await run_pricing_analysis(merchant, payload.product_ids)
+        result = await run_pricing_analysis(merchant, selections)
         logger.info(
-            "Pricing Analysis Success - Merchant: %s, Products analyzed: %d",
+            "Pricing Analysis Success - Merchant: %s, Selections analyzed: %d",
             merchant.name,
-            len(payload.product_ids),
+            len(selections),
         )
         return success(data=result)
     except Exception:
         logger.exception(
-            "Pricing Analysis Error - Merchant: %s, Products: %s",
+            "Pricing Analysis Error - Merchant: %s, Selections: %s",
             merchant.name,
-            payload.product_ids,
+            selections,
         )
         raise HTTPException(status_code=500, detail="调价分析服务暂时不可用，请稍后重试")
 
@@ -91,7 +126,7 @@ async def review_pricing_decision(
 
         result = await run_pricing_analysis(
             merchant=merchant,
-            product_ids=[],  # resume 时不需要
+            selections=[],  # resume 时不需要，state 中已持久化
             thread_id=command.thread_id,
             command=langgraph_cmd,
             feedback=command.feedback,

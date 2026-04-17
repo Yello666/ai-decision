@@ -12,6 +12,7 @@ import logging
 import time
 from typing import List, Callable, Awaitable
 
+from app.core.config import get_settings
 from app.db.redis import get_redis_client
 from app.schemas.hotspot import CollectTrendObject
 
@@ -21,10 +22,12 @@ HOT_TRENDS_PREFIX = "hot_trends:"
 LOCK_SUFFIX = ":lock"
 
 CACHE_MAX_RESULTS = 50
-LOGICAL_TTL_SECONDS = 60
 LOCK_TTL_SECONDS = 30
 SPIN_INTERVAL = 0.3
 SPIN_MAX_WAIT = LOCK_TTL_SECONDS
+DEFAULT_PRELOAD_PLATFORMS = ["youtube"]
+
+settings = get_settings()
 
 
 def _normalize_platforms(platforms: List[str] | None) -> List[str]:
@@ -48,7 +51,7 @@ def _serialize(data: List[CollectTrendObject]) -> str:
     return json.dumps(
         {
             "data": [x.model_dump(mode="json") for x in data],
-            "expire_at": time.time() + LOGICAL_TTL_SECONDS,
+            "expire_at": time.time() + settings.HOT_TRENDS_LOGICAL_TTL_SECONDS,
         },
         ensure_ascii=False,
     )
@@ -169,3 +172,17 @@ async def _refresh_and_set(
             await redis.delete(lock_key)
         except Exception:
             logger.exception("后台刷新释放锁失败, lock_key=%s", lock_key)
+
+
+async def preload_hot_trends_cache(
+    loader: Callable[[List[str], int], Awaitable[List[CollectTrendObject]]],
+    platforms: List[str] | None = None,
+) -> None:
+    """启动预热缓存：强制回源并覆盖缓存，确保首个请求可直接命中。"""
+    norm_platforms = _normalize_platforms(platforms or DEFAULT_PRELOAD_PLATFORMS)
+    key = _cache_key(norm_platforms)
+    redis = get_redis_client()
+
+    data = await loader(norm_platforms, CACHE_MAX_RESULTS)
+    await redis.set(key, _serialize(data))
+    logger.info("启动预热热点缓存成功, key=%s, 条目数=%d", key, len(data))

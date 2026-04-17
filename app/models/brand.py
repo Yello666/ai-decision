@@ -13,8 +13,8 @@ class Brand(Base):
     merchant_id = Column(Integer, index=True, nullable=False)  # 所属商户
 
     name= Column(String(64), index=True, nullable=False,comment="品牌名称")
-    core_value= Column(String(64), index=False, nullable=False,comment="品牌核心价值，目标")
-    industry= Column(String(64), index=False, nullable=False,comment="品牌所属行业")
-    tone= Column(String(64), index=False, nullable=False,comment="品牌调性")
+    industry= Column(String(64), index=False, nullable=False,comment="品牌主要售卖商品")
+    core_value = Column(String(64), index=False, nullable=False, comment="品牌目标或介绍")
+    tone= Column(String(64), index=False, nullable=False,comment="品牌风格")
     audience= Column(String(64), index=False,comment="品牌目标受众")
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -15,6 +15,10 @@ router = APIRouter(prefix="/merchant", tags=["merchant"])
 @router.get("/info")
 def get_info(current_merchant: Merchant = Depends(get_current_merchant)):
     return success(MerchantOut.model_validate(current_merchant))
+# 获取品牌信息
+
+
+
 
 # 登录之后设置品牌信息
 #接收shopifyAPP前端传入的BrandObject，并存储到数据库当中。
