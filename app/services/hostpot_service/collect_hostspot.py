@@ -3,6 +3,8 @@ import json
 import logging
 import asyncio
 from typing import List, Dict, Any
+
+import httpx
 from openai import OpenAI, AsyncOpenAI
 from app.schemas.hotspot import (
     SentimentCN,
@@ -21,8 +23,9 @@ _LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compat
 _LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-b0fc3528ced64aa4b31eca19eb10fb39")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen-plus")
 
-LLM_CLIENT = OpenAI(base_url=_LLM_BASE_URL, api_key=_LLM_API_KEY)
-ASYNC_LLM_CLIENT = AsyncOpenAI(base_url=_LLM_BASE_URL, api_key=_LLM_API_KEY)
+# proxy=None：强制不走系统/环境变量代理，避免全局代理干扰国内大模型请求
+LLM_CLIENT = OpenAI(base_url=_LLM_BASE_URL, api_key=_LLM_API_KEY, http_client=httpx.Client(proxy=None))
+ASYNC_LLM_CLIENT = AsyncOpenAI(base_url=_LLM_BASE_URL, api_key=_LLM_API_KEY, http_client=httpx.AsyncClient(proxy=None))
 
 BATCH_SIZE = 10
 

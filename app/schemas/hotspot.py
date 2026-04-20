@@ -113,6 +113,11 @@ class RecommendationLevel(str, Enum):
         return mapping.get(value, cls.no)
 
 
+class HotspotLLMModel(str, Enum):
+    qwen_35_plus = "qwen3.5-plus"
+    qwen_35_flash = "qwen3.5-flash"
+
+
 class HotspotTrendRequest(BaseModel):
     """获取热点数据的请求参数结构体（分页）"""
     platforms: List[str] = Field(default=["youtube"], description="需要获取热点的平台列表")
@@ -129,28 +134,14 @@ class PaginatedTrendResponse(BaseModel):
     total_pages: int = Field(description="总页数")
 
 
-class HotspotMatchOptions(BaseModel):
-    """算法选项：默认离线可运行；如配置了 LLM，可打开 use_llm 做精算。"""
-
-    use_llm: bool = Field(default=True, description="是否启用大模型精算（需要配置环境变量）")
-    # use_embedding_prefilter: bool = Field(default=False, description="是否启用向量粗筛（适合海量热点场景）")
-    # 权重（可按业务调整）
-    w_semantic: float = Field(default=0.4, ge=0, le=1) #语义重合
-    w_tone: float = Field(default=0.3, ge=0, le=1)  #调性匹配
-    w_creative: float = Field(default=0.3, ge=0, le=1)  #创意发挥空间
-
-
-class HotspotMatchRequest(BaseModel):
-    trend: TrendObject
-    brand: BrandObject
-    options: HotspotMatchOptions = Field(default_factory=HotspotMatchOptions)
-
-
 class HotspotBatchMatchRequest(BaseModel):
     """批量热点匹配请求：品牌信息由服务端按当前登录商户从 DB 加载，无需前端传入。"""
 
     trends: List[TrendObject] = Field(..., description="待分析的热点列表")
-    options: HotspotMatchOptions = Field(default_factory=HotspotMatchOptions)
+    llm_model: HotspotLLMModel = Field(
+        default=HotspotLLMModel.qwen_35_plus,
+        description="匹配分析使用的大模型：qwen3.5-plus 或 qwen3.5-flash",
+    )
 
 
 class HotspotMatchResponse(BaseModel):

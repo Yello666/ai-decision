@@ -5,9 +5,6 @@ from app.core.config import get_settings
 
 def get_db_url() -> str:
     settings = get_settings()
-    if settings.USE_SQLITE:
-        return "sqlite:///./test.db"
-    
     password = settings.MYSQL_PASSWORD
     if password:
         password = password.replace("@", "%40")

@@ -11,8 +11,8 @@ class Generation(Base):
     id = Column(Integer, primary_key=True, index=True)
     shopify_store_id = Column(String(64), index=True, nullable=False)  # 所属店铺，多租户隔离
 
-    type = Column(String(16), nullable=False, index=True)  # video | image | text
-    status = Column(String(32), nullable=False, default="pending", index=True)  # pending | processing | completed | failed
+    type = Column(String(16), nullable=False, index=True)  # video | text
+    status = Column(String(32), nullable=False, default="pending", index=True)  # queued | running | succeeded | failed | expired | canceled
 
     prompt_used = Column(Text, nullable=False)  # 实际发给模型/API 的 prompt
     trend_snapshot = Column(JSON, nullable=True)   # TrendObject 快照

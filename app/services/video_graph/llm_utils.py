@@ -83,8 +83,12 @@ Each segment must include:
 - mode: one of text_to_video, image_to_video, frame_interpolation
 
 ## CONTINUITY & EXECUTION STRATEGY
+- Only segment 1 is permitted to use text_to_video mode.
+- Segments other than segment 1 are strictly prohibited from using text_to_video, and must exclusively use frame_interpolation mode based on the first frame inheritance to ensure stable character, scene and visual style continuity between consecutive segments.
+- execution_strategy must be set to "sequential".
 - If segments need visual continuity (same character/scene across clips), use frame_interpolation for segments after the first, and set execution_strategy to "sequential".
 - For independent segments, set execution_strategy to "parallel".
+
 
 ## OUTPUT FORMAT (strict JSON)
 {

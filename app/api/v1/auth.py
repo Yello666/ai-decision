@@ -32,12 +32,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-
-@router.get("/ping")
-async def ping():
-    return success({"message": "pong"})
-
-
 @router.post("/register")
 async def register(payload: MerchantCreate):
     auth_url = await initiate_registration(payload)

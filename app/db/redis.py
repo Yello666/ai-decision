@@ -16,15 +16,6 @@ def get_redis_client() -> redis.Redis:
 
     settings = get_settings()
 
-    if settings.USE_MOCK_REDIS:
-        try:
-            from fakeredis import aioredis
-            _client = aioredis.FakeRedis(decode_responses=True)
-            return _client
-        except ImportError:
-            # Fallback or error
-            pass
-
     pool = redis.ConnectionPool(
         host=settings.REDIS_HOST,
         port=settings.REDIS_PORT,

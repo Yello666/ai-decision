@@ -8,11 +8,11 @@ from langgraph.types import Command
 from app.api.deps import get_current_merchant
 from app.core.responses import success
 from app.models import Merchant
-from app.services.pricing_agent import run_pricing_analysis
+from app.services.pricing_service import run_pricing_analysis
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/pricing-agent", tags=["pricing-agent"])
+router = APIRouter(prefix="/pricing-analyze", tags=["pricing-analyze"])
 
 
 class ProductSelection(BaseModel):

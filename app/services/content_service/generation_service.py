@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import httpx
 from sqlalchemy.orm import Session
 
 from app.models import Generation
@@ -208,7 +209,8 @@ def _call_llm_for_text(prompt: str) -> str:
     base_url = settings.LLM_API_URL
     if not api_key:
         raise ValueError("未配置 LLM_API_KEY，无法生成文字")
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    # proxy=None：强制不走系统/环境变量代理，避免全局代理干扰国内大模型请求
+    client = OpenAI(api_key=api_key, base_url=base_url, http_client=httpx.Client(proxy=None))
     model = settings.LLM_MODEL
     resp = client.chat.completions.create(
         model=model,

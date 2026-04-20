@@ -61,6 +61,17 @@ class Settings(BaseSettings):
             self.COOKIE_SECURE = False
         return self
 
+    @model_validator(mode="after")
+    def _validate_ws_heartbeat_config(self) -> "Settings":
+        """WebSocket：pong 超时时长必须大于心跳间隔，否则必然误判离线。"""
+        if self.WS_PONG_TIMEOUT_SECONDS <= self.WS_HEARTBEAT_INTERVAL_SECONDS:
+            raise ValueError(
+                "WS_PONG_TIMEOUT_SECONDS must be greater than WS_HEARTBEAT_INTERVAL_SECONDS "
+                f"(got pong_timeout={self.WS_PONG_TIMEOUT_SECONDS}, "
+                f"heartbeat_interval={self.WS_HEARTBEAT_INTERVAL_SECONDS})"
+            )
+        return self
+
 
     # JWT
     JWT_SECRET_KEY: str
@@ -80,6 +91,7 @@ class Settings(BaseSettings):
 
     # -------- 热点缓存配置 --------
     HOT_TRENDS_LOGICAL_TTL_SECONDS: int = 600 #10分钟更新1次
+    # 是否启动系统时预加载热点
     PRELOADING_HOT_TRENDS: bool = False
     # 单热点 LLM 分析结果缓存：命中则直接复用，不再调用大模型
     HOT_TRENDS_ANALYSIS_CACHE_TTL_SECONDS: int = 7 * 24 * 3600  # 7 天
@@ -91,6 +103,13 @@ class Settings(BaseSettings):
     HOT_TRENDS_MATCH_VERSION: str = "v1"
 
     LOG_LEVEL: str = "INFO"
+
+    # -------- WebSocket 心跳/超时配置 --------
+    # 服务端发送 {"event":"ping"} 的间隔（秒）
+    WS_HEARTBEAT_INTERVAL_SECONDS: int = 30
+    # 超过该时长未收到任何合法客户端 JSON 消息即判定离线并断开连接（秒）
+    # HEARTBEAT_INTERVAL * 2 + 余量，避免偶发丢包误判
+    WS_PONG_TIMEOUT_SECONDS: int = 75
 
     # 允许的前端域名：在有cookie和Authorization请求头的时候需要具体域名，在这里配置即可。其余时候不会使用这里的域名
     #多个域名使用,分隔
@@ -104,10 +123,6 @@ class Settings(BaseSettings):
 
     AUTODL_SERVICE_URL: str = "http://localhost:8001/predict"
 
-    # SeedDance 2.0
-    SEEDANCE_API_KEY: Optional[str] = None
-    SEEDANCE_BASE_URL: str = "https://seedance2.app/api/v1"
-    SEEDANCE_IMAGE_MODEL: str = "seedream-4.5"
 
     # Seedance 1.5 Pro 视频生成 (火山引擎方舟)
     SEEDANCE_VIDEO_API_KEY: str
@@ -129,10 +144,6 @@ class Settings(BaseSettings):
 
     # Competitor cache（2h）
     COMPETITOR_CACHE_TTL: int = 7200
-
-    # Test flags
-    USE_SQLITE: bool = False
-    USE_MOCK_REDIS: bool = False
 
 
 @lru_cache

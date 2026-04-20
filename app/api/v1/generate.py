@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -9,6 +10,7 @@ from jose import JWTError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_merchant
+from app.core.config import get_settings
 from app.core.responses import success
 from app.core.security import decode_access_token
 from app.db.mysql import get_db
@@ -40,88 +42,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/generate", tags=["generate"])
 
-
-# ----------------------------------------------------------
-# 视频生成 — Seedance 1.5 Pro (火山引擎方舟)
-# 文生视频 (text2video): content 只含 text 项
-# 图生视频 (image2video): content 含 text + image_url 项
-# ----------------------------------------------------------
-@router.post("/generate-video", response_model=dict)
-async def generate_video(
-    payload: Union[Image2VideoRequest, Text2VideoRequest],
-    current_merchant: Merchant = Depends(get_current_merchant),
-):
-    """
-    调用 Seedance 1.5 Pro 创建视频生成任务。
-
-    - **文生视频**: content 仅包含 type=text 的项
-    - **图生视频**: content 同时包含 type=text 和 type=image_url 的项
-
-    请求/响应格式与火山引擎官方 API 一致。成功后返回任务 ID，
-    可调用 GET /generate/video-task-status/{task_id} 轮询任务状态。
-    """
-    try:
-        request_body = payload.model_dump(exclude_none=True)
-        result = await create_seedance_video_task(request_body)
-    except ValueError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except HTTPStatusError as e:
-        logger.error("Seedance create task upstream error: %s", e.response.text)
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"上游 API 错误: {e.response.text}",
-        )
-    except Exception as e:
-        logger.exception("Seedance create task unexpected error")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    return success(
-        CreateVideoTaskResponse(
-            id=result.get("id", ""),
-            status=result.get("status", "submitted"),
-        )
-    )
-
-
-# ----------------------------------------------------------
-# 参考图生视频 — Seedance 1.0 Lite i2v
-# content 含 1~4 张参考图(role=reference_image) + 可选文本
-# ----------------------------------------------------------
-@router.post("/ref2video", response_model=dict)
-async def generate_ref2video(
-    payload: Ref2VideoRequest,
-    current_merchant: Merchant = Depends(get_current_merchant),
-):
-    """
-    调用 Seedance 1.0 Lite i2v 创建参考图生视频任务。
-
-    - content 包含 **1~4 张参考图**（type=image_url, role=reference_image）
-    - 可选文本提示词，推荐使用 "[图1]xxx，[图2]xxx" 格式指定图片组合
-    - 参考图场景不支持 1080p 分辨率、不支持 adaptive 宽高比
-
-    成功后返回任务 ID，可调用 GET /generate/video-task-status/{task_id} 轮询状态。
-    """
-    try:
-        request_body = payload.model_dump(exclude_none=True)
-        result = await create_seedance_video_task(request_body)
-    except ValueError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except HTTPStatusError as e:
-        logger.error("Seedance Lite i2v create task upstream error: %s", e.response.text)
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"上游 API 错误: {e.response.text}",
-        )
-    except Exception as e:
-        logger.exception("Seedance Lite i2v create task unexpected error")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    return success(
-        CreateVideoTaskResponse(
-            id=result.get("id", ""),
-            status=result.get("status", "submitted"),
-        )
-    )
+#
 
 
 # ----------------------------------------------------------
@@ -164,66 +85,6 @@ async def get_video_task_status(
             error=result.get("error"),
         )
     )
-
-
-# ----------------------------------------------------------
-# 热点 × 品牌 × 产品 → 病毒式短视频广告
-# 自动组装 Prompt，支持 text/image/ref 三种生成模式
-# ----------------------------------------------------------
-@router.post("/trend-product-video", response_model=dict)
-async def generate_trend_product_video(
-    payload: TrendProductVideoRequest,
-    current_merchant: Merchant = Depends(get_current_merchant),
-    db: Session = Depends(get_db),
-):
-    """
-    结合热点、品牌调性和产品信息，生成夸张搞笑、具有病毒传播潜力的短视频广告。
-
-    - **text_to_video**: 纯文生视频
-    - **image_to_video**: 图生视频（1 张图 = 首帧，2 张图 = 首帧 + 尾帧）
-    - **ref_to_video**: 参考图生视频（每张图作为 reference_image）
-
-    成功后返回任务 ID，可调用 GET /generate/video-task-status/{task_id} 轮询状态，
-    或等待方舟平台回调 POST /generate/callback 自动更新状态。
-    """
-    try:
-        request_body, prompt_used = await build_seedance_payload(payload)
-        result = await create_seedance_video_task(request_body)
-    except ValueError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except HTTPStatusError as e:
-        logger.error("Trend-product-video upstream error: %s", e.response.text)
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"上游 API 错误: {e.response.text}",
-        )
-    except Exception as e:
-        logger.exception("Trend-product-video unexpected error")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    task_id = result.get("id", "")
-    gen = Generation(
-        shopify_store_id=current_merchant.shopify_store_id,
-        type="video",
-        status="queued",
-        prompt_used=prompt_used,
-        trend_snapshot=payload.trendObject.model_dump(),
-        brand_snapshot=payload.brandObject.model_dump(),
-        external_id=task_id,
-    )
-    db.add(gen)
-    db.commit()
-    db.refresh(gen)
-    logger.info(
-        "Generation 记录已创建: id=%s, external_id=%s, store=%s",
-        gen.id, task_id, current_merchant.shopify_store_id,
-    )
-
-    return success(data={
-        "id": task_id,
-        "generation_id": gen.id,
-        "prompt": prompt_used,
-    })
 
 
 # ----------------------------------------------------------
@@ -378,25 +239,42 @@ async def _continue_sequential_chain(
 #
 # 鉴权：通过 query param 传递 JWT access_token
 # 通道：每个商户订阅独立 Redis channel gen:status:{store_id}
-# 心跳：服务端每 30s 发送 ping，前端无需额外处理
+#
+# 心跳协议（仅接受 JSON 文本帧）：
+#   服务端 → 客户端: {"event":"ping"}   连接建立后立即发一次，之后每 WS_HEARTBEAT_INTERVAL_SECONDS 秒
+#   客户端 → 服务端: {"event":"pong"}   收到 ping 后尽快回复
+#   客户端主动下线 : {"event":"close"}  收到后服务端清理并断开
+#   任意带合法 event 的 JSON 对象（除 close 外）均刷新「客户端活跃时间」
+# 若超过 WS_PONG_TIMEOUT_SECONDS 未刷新活跃时间，服务端判定离线并断开。
 # ----------------------------------------------------------
+# WebSocket 关闭状态码（应用层自定义，1000~2999 由协议保留）
+_WS_CLOSE_NORMAL = 1000           # 正常关闭（客户端主动 close）
+_WS_CLOSE_CLIENT_ACTIVITY_TIMEOUT = 4002  # 长时间无合法客户端消息，判定离线
+_WS_CLOSE_INVALID_TOKEN = 4001    # JWT 鉴权失败
+_WS_CLOSE_INVALID_CLIENT_JSON = 1008  # RFC：违反策略；此处表示非约定 JSON / 缺少 event
+
+
 @router.websocket("/ws/status")
 async def ws_generation_status(
     websocket: WebSocket,
     token: str = Query(...),
 ):
+    settings = get_settings()
+    heartbeat_interval = settings.WS_HEARTBEAT_INTERVAL_SECONDS
+    pong_timeout = settings.WS_PONG_TIMEOUT_SECONDS
+
     # ---- 1. JWT 鉴权 ----
     try:
         payload = decode_access_token(token)
         if payload.get("type") != "access":
-            await websocket.close(code=4001, reason="invalid_token")
+            await websocket.close(code=_WS_CLOSE_INVALID_TOKEN, reason="invalid_token")
             return
         store_id = payload.get("sub")
         if not store_id:
-            await websocket.close(code=4001, reason="invalid_token")
+            await websocket.close(code=_WS_CLOSE_INVALID_TOKEN, reason="invalid_token")
             return
     except JWTError:
-        await websocket.close(code=4001, reason="invalid_token")
+        await websocket.close(code=_WS_CLOSE_INVALID_TOKEN, reason="invalid_token")
         return
 
     await websocket.accept()
@@ -408,50 +286,159 @@ async def ws_generation_status(
     channel = f"gen:status:{store_id}"
     await pubsub.subscribe(channel)
 
+    # 最近一次「合法客户端 JSON 消息」刷新的单调时钟时间（含 pong 等任意 event）
+    last_client_activity_at = time.monotonic()
+    # 任一分支决定结束时置位，其他分支感知后退出
+    stop_event = asyncio.Event()
+    # 统一会话结束原因，提升可读性并集中映射 close code
+    session_end_reason: str | None = None
+
     async def _forward_redis_messages():
         """从 Redis Pub/Sub 读取消息并转发到 WebSocket。"""
         try:
             async for message in pubsub.listen():
+                if stop_event.is_set():
+                    break
                 if message["type"] == "message":
                     await websocket.send_text(message["data"])
         except asyncio.CancelledError:
-            pass
+            raise
+        except Exception:
+            logger.exception("WS forward 任务异常: store_id=%s", store_id)
+        finally:
+            stop_event.set()
 
     async def _heartbeat():
-        """每 30 秒发送 ping 帧保活，检测断连。"""
+        """连接建立后先发一次 ping，再按固定周期发送。"""
         try:
-            while True:
-                await asyncio.sleep(30)
-                await websocket.send_json({"event": "ping"})
+            while not stop_event.is_set():
+                try:
+                    await websocket.send_json({"event": "ping"})
+                except Exception:
+                    break
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=heartbeat_interval)
+                    break
+                except asyncio.TimeoutError:
+                    continue
         except asyncio.CancelledError:
-            pass
+            raise
+        finally:
+            stop_event.set()
 
     async def _receive_client_messages():
-        """监听前端消息，处理断连。支持 pong 心跳回复。"""
+        """
+        监听客户端消息：
+        - {"event":"pong"}  → 更新 last_pong_at
+        - {"event":"close"} → 客户端主动断开，标记并结束
+        """
+        nonlocal last_client_activity_at, session_end_reason
         try:
-            while True:
+            while not stop_event.is_set():
                 data = await websocket.receive_text()
-                if data == "pong":
-                    continue
+                try:
+                    payload = json.loads(data)
+                except json.JSONDecodeError:
+                    logger.warning("WS 收到非 JSON 文本，断开: store_id=%s", store_id)
+                    session_end_reason = "invalid_client_message"
+                    break
+
+                if not isinstance(payload, dict):
+                    logger.warning("WS JSON 须为对象，断开: store_id=%s", store_id)
+                    session_end_reason = "invalid_client_message"
+                    break
+
+                event = payload.get("event")
+                if not isinstance(event, str) or not event:
+                    logger.warning("WS JSON 缺少合法 event 字段，断开: store_id=%s", store_id)
+                    session_end_reason = "invalid_client_message"
+                    break
+
+                if event == "close":
+                    session_end_reason = "client_closed"
+                    logger.info("WS 客户端主动断开: store_id=%s", store_id)
+                    break
+
+                last_client_activity_at = time.monotonic()
         except WebSocketDisconnect:
             pass
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("WS receive 任务异常: store_id=%s", store_id)
+        finally:
+            stop_event.set()
 
-    # ---- 3. 并发运行：Redis 转发 + 心跳 + 客户端监听 ----
+    async def _client_activity_timeout_watcher():
+        """超过 pong_timeout 未收到任何合法客户端消息则判离线。"""
+        nonlocal session_end_reason
+        try:
+            check_interval = max(1, min(heartbeat_interval, max(1, pong_timeout // 2)))
+            while not stop_event.is_set():
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=check_interval)
+                    break
+                except asyncio.TimeoutError:
+                    pass
+                if time.monotonic() - last_client_activity_at > pong_timeout:
+                    session_end_reason = "client_activity_timeout"
+                    logger.info(
+                        "WS 客户端活跃超时，断开: store_id=%s, timeout=%ss",
+                        store_id, pong_timeout,
+                    )
+                    break
+        except asyncio.CancelledError:
+            raise
+        finally:
+            stop_event.set()
+
+    # ---- 3. 并发运行：Redis 转发 + 心跳 + 客户端监听 + 超时监控 ----
     forward_task = asyncio.create_task(_forward_redis_messages())
     heartbeat_task = asyncio.create_task(_heartbeat())
     receive_task = asyncio.create_task(_receive_client_messages())
+    watcher_task = asyncio.create_task(_client_activity_timeout_watcher())
+    tasks = [forward_task, heartbeat_task, receive_task, watcher_task]
 
     try:
-        done, pending = await asyncio.wait(
-            [forward_task, heartbeat_task, receive_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for task in pending:
-            task.cancel()
+        await stop_event.wait()
     finally:
-        await pubsub.unsubscribe(channel)
-        await pubsub.aclose()
-        logger.info("WebSocket 已断开: store_id=%s", store_id)
+        # ---- 4. 清理：取消后台任务、退订 Redis、关闭 WS ----
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        try:
+            await pubsub.unsubscribe(channel)
+        except Exception:
+            logger.warning("Redis unsubscribe 失败: channel=%s", channel, exc_info=True)
+        try:
+            await pubsub.aclose()
+        except Exception:
+            logger.warning("Redis pubsub close 失败: channel=%s", channel, exc_info=True)
+
+        if session_end_reason == "client_activity_timeout":
+            close_code, close_reason = _WS_CLOSE_CLIENT_ACTIVITY_TIMEOUT, "client_activity_timeout"
+        elif session_end_reason == "client_closed":
+            close_code, close_reason = _WS_CLOSE_NORMAL, "client_closed"
+        elif session_end_reason == "invalid_client_message":
+            close_code, close_reason = _WS_CLOSE_INVALID_CLIENT_JSON, "invalid_client_message"
+        else:
+            close_code, close_reason = _WS_CLOSE_NORMAL, "server_closed"
+
+        try:
+            await websocket.close(code=close_code, reason=close_reason)
+        except Exception:
+            pass
+
+        logger.info(
+            "WebSocket 已断开: store_id=%s, code=%s, reason=%s",
+            store_id, close_code, close_reason,
+        )
 
 
 # ----------------------------------------------------------
@@ -469,7 +456,88 @@ async def get_generation(
     gen = get_generation_by_id(db, generation_id, current_merchant.shopify_store_id)
     if not gen:
         raise HTTPException(status_code=404, detail="generation_not_found")
-    if gen.type == "video" and gen.status in ("pending", "processing"):
-        await refresh_video_status(db, gen)
     return success(GenerationOut.model_validate(gen))
 
+
+
+# # ----------------------------------------------------------
+# # 视频生成 — Seedance 1.5 Pro (火山引擎方舟)
+# # 文生视频 (text2video): content 只含 text 项
+# # 图生视频 (image2video): content 含 text + image_url 项
+# # ----------------------------------------------------------
+# @router.post("/generate-video", response_model=dict)
+# async def generate_video(
+#     payload: Union[Image2VideoRequest, Text2VideoRequest],
+#     current_merchant: Merchant = Depends(get_current_merchant),
+# ):
+#     """
+#     调用 Seedance 1.5 Pro 创建视频生成任务。
+#
+#     - **文生视频**: content 仅包含 type=text 的项
+#     - **图生视频**: content 同时包含 type=text 和 type=image_url 的项
+#
+#     请求/响应格式与火山引擎官方 API 一致。成功后返回任务 ID，
+#     可调用 GET /generate/video-task-status/{task_id} 轮询任务状态。
+#     """
+#     try:
+#         request_body = payload.model_dump(exclude_none=True)
+#         result = await create_seedance_video_task(request_body)
+#     except ValueError as e:
+#         raise HTTPException(status_code=503, detail=str(e))
+#     except HTTPStatusError as e:
+#         logger.error("Seedance create task upstream error: %s", e.response.text)
+#         raise HTTPException(
+#             status_code=e.response.status_code,
+#             detail=f"上游 API 错误: {e.response.text}",
+#         )
+#     except Exception as e:
+#         logger.exception("Seedance create task unexpected error")
+#         raise HTTPException(status_code=500, detail=str(e))
+#
+#     return success(
+#         CreateVideoTaskResponse(
+#             id=result.get("id", ""),
+#             status=result.get("status", "submitted"),
+#         )
+#     )
+#
+#
+# # ----------------------------------------------------------
+# # 参考图生视频 — Seedance 1.0 Lite i2v
+# # content 含 1~4 张参考图(role=reference_image) + 可选文本
+# # ----------------------------------------------------------
+# @router.post("/ref2video", response_model=dict)
+# async def generate_ref2video(
+#     payload: Ref2VideoRequest,
+#     current_merchant: Merchant = Depends(get_current_merchant),
+# ):
+#     """
+#     调用 Seedance 1.0 Lite i2v 创建参考图生视频任务。
+#
+#     - content 包含 **1~4 张参考图**（type=image_url, role=reference_image）
+#     - 可选文本提示词，推荐使用 "[图1]xxx，[图2]xxx" 格式指定图片组合
+#     - 参考图场景不支持 1080p 分辨率、不支持 adaptive 宽高比
+#
+#     成功后返回任务 ID，可调用 GET /generate/video-task-status/{task_id} 轮询状态。
+#     """
+#     try:
+#         request_body = payload.model_dump(exclude_none=True)
+#         result = await create_seedance_video_task(request_body)
+#     except ValueError as e:
+#         raise HTTPException(status_code=503, detail=str(e))
+#     except HTTPStatusError as e:
+#         logger.error("Seedance Lite i2v create task upstream error: %s", e.response.text)
+#         raise HTTPException(
+#             status_code=e.response.status_code,
+#             detail=f"上游 API 错误: {e.response.text}",
+#         )
+#     except Exception as e:
+#         logger.exception("Seedance Lite i2v create task unexpected error")
+#         raise HTTPException(status_code=500, detail=str(e))
+#
+#     return success(
+#         CreateVideoTaskResponse(
+#             id=result.get("id", ""),
+#             status=result.get("status", "submitted"),
+#         )
+#     )

@@ -15,6 +15,8 @@ import json
 import logging
 from typing import Any, Dict, List, Literal, TypedDict
 
+import httpx
+
 from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -59,12 +61,15 @@ def _get_llm() -> ChatOpenAI:
     if not model:
         raise ValueError("Missing AGENT_MODEL_NAME — set it in .env")
 
+    # proxy=None：强制不走系统/环境变量代理，避免全局代理干扰国内大模型请求
     _llm_instance = ChatOpenAI(
         model=model,
         api_key=SecretStr(api_key),
         base_url=base_url,
         timeout=180,
         max_retries=3,
+        http_client=httpx.Client(proxy=None),
+        http_async_client=httpx.AsyncClient(proxy=None),
     )
     return _llm_instance
 
