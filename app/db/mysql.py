@@ -17,14 +17,13 @@ def get_db_url() -> str:
 settings = get_settings()
 db_url = get_db_url()
 
-connect_args = {}
 
 engine = create_engine(
     db_url,
-    pool_pre_ping=True 
-    pool_size=settings.MYSQL_POOL_SIZE 
-    max_overflow=settings.MYSQL_MAX_OVERFLOW
-    connect_args=connect_args
+    pool_pre_ping=True,
+    pool_size=settings.MYSQL_POOL_SIZE ,
+    max_overflow=settings.MYSQL_MAX_OVERFLOW,
+    connect_args={}
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
