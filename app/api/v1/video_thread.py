@@ -89,19 +89,4 @@ async def stream_thread_events(
     request: Request,
     current_merchant: Merchant = Depends(get_current_merchant),
 ):
-    """
-    SSE 事件流。前端示例：
-
-        const es = new EventSource(`/video-thread/${threadId}/stream`, { withCredentials: true });
-        es.addEventListener("progress", e => {...});
-        es.addEventListener("human_action_required", e => {...});
-        es.addEventListener("done", e => { es.close(); });
-        es.addEventListener("error", e => { es.close(); /* 降级轮询 /state */ });
-
-    实现要点：
-      - 先发送一次 `state` 事件，把最新视图态推给刚连上的客户端，避免空窗期。
-      - 订阅 EventBus；遇到 `done` / `error` 主动关闭连接。
-      - 每 15s 发一个 `: ping` 注释帧保活，穿透 nginx / 浏览器空闲断开。
-      - 断联（`request.is_disconnected`）时及时 unsubscribe 释放资源。
-    """
     return await stream_thread_events_response(thread_id, request, current_merchant)
