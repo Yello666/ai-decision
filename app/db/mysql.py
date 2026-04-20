@@ -18,14 +18,12 @@ settings = get_settings()
 db_url = get_db_url()
 
 connect_args = {}
-if settings.USE_SQLITE:
-    connect_args = {"check_same_thread": False}
 
 engine = create_engine(
     db_url,
-    pool_pre_ping=True if not settings.USE_SQLITE else False,
-    pool_size=settings.MYSQL_POOL_SIZE if not settings.USE_SQLITE else 5,
-    max_overflow=settings.MYSQL_MAX_OVERFLOW if not settings.USE_SQLITE else 10,
+    pool_pre_ping=True 
+    pool_size=settings.MYSQL_POOL_SIZE 
+    max_overflow=settings.MYSQL_MAX_OVERFLOW
     connect_args=connect_args
 )
 
