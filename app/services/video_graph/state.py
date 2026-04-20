@@ -30,6 +30,17 @@ class ConfigParams(TypedDict, total=False):
     generate_audio: bool
 
 
+# 默认参数：用户未显式指定时的兜底值。
+# 放在 state.py 便于 service / nodes 共享，避免反向 import。
+DEFAULT_CONFIG: ConfigParams = {
+    "resolution": "720p",
+    "ratio": "adaptive",
+    "language": "zh",
+    "watermark": False,
+    "generate_audio": True,
+}
+
+
 class TaskResult(TypedDict, total=False):
     """单个 Seedance 任务的提交结果。"""
     segment_id: int

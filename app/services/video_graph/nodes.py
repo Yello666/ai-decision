@@ -15,6 +15,7 @@ from typing import Any
 
 from app.services.video_graph.event_bus import publish_event
 from app.services.video_graph.state import (
+    DEFAULT_CONFIG,
     ConfigParams,
     ScriptSegment,
     VideoGenerationState,
@@ -25,13 +26,6 @@ logger = logging.getLogger(__name__)
 
 MAX_SEGMENT_DURATION = 12
 MIN_SEGMENT_DURATION = 4  # seedance 1.5 pro 官方下限
-DEFAULT_CONFIG: ConfigParams = {
-    "resolution": "720p",
-    "ratio": "adaptive",
-    "language": "zh",
-    "watermark": False,
-    "generate_audio": True,
-}
 
 
 # ──────────────────────────────────────────────
@@ -552,6 +546,7 @@ async def respond(state: VideoGenerationState) -> dict[str, Any]:
 
     task_results = state.get("task_results", [])
     store_id = state.get("shopify_store_id", "")
+    thread_id = state.get("thread_id", "")
     trend = state.get("trend", {})
     brand = state.get("brand", {})
     segments = state.get("script_segments", [])
@@ -572,6 +567,7 @@ async def respond(state: VideoGenerationState) -> dict[str, Any]:
                 shopify_store_id=store_id,
                 type="video",
                 status="queued",
+                thread_id=thread_id or None,
                 prompt_used=tr.get("prompt", ""),
                 trend_snapshot=trend,
                 brand_snapshot=brand,

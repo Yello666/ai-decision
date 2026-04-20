@@ -14,12 +14,17 @@ from fastapi import APIRouter, Depends, Request
 from app.api.deps import get_current_merchant
 from app.core.responses import success
 from app.models import Merchant
-from app.schemas.video_thread import CreateThreadRequest, ResumeThreadRequest
+from app.schemas.video_thread import (
+    CreateThreadRequest,
+    ResumeThreadRequest,
+    UpdateThreadParamsRequest,
+)
 from app.services.video_thread_service import (
     create_thread_task,
     get_thread_view_state,
     resume_thread_task,
     stream_thread_events_response,
+    update_thread_params,
 )
 
 router = APIRouter(prefix="/video-thread", tags=["video-thread"])
@@ -60,6 +65,27 @@ async def resume_thread(
     """
     data = await resume_thread_task(thread_id, payload, current_merchant)
     return success(data=data)
+
+
+# # ──────────────────────────────────────────────
+# # PATCH /video-thread/{thread_id}/params
+# #   仅修改视频全局参数，不推进 Graph。
+# #   典型用法：waiting_human 阶段用户在审阅分镜时，先调节分辨率/比例/语言等，
+# #            然后再调 /resume 提交 approve / edit / feedback。
+# # ──────────────────────────────────────────────
+# @router.patch("/{thread_id}/params", response_model=dict)
+# async def patch_thread_params(
+#     thread_id: str,
+#     payload: UpdateThreadParamsRequest,
+#     current_merchant: Merchant = Depends(get_current_merchant),
+# ):
+#     """
+#     修改视频生成会话的全局参数（config_params / media_assets / generation_mode）。
+#     仅在 parse_intent_done / plan_script_done / waiting_human 阶段可用；
+#     任务一旦进入 assemble_and_submit 及后续阶段即拒绝修改。
+#     """
+#     data = await update_thread_params(thread_id, payload, current_merchant)
+#     return success(data=data)
 
 
 # ──────────────────────────────────────────────
