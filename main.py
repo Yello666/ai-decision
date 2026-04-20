@@ -100,4 +100,4 @@ def health_check():
 app.include_router(api_v1_router, prefix=settings.API_V1_PREFIX)
 
 # 静态文件
-app.mount("/frontend", StaticFiles(directory="frontend"), name="frontend")
+# app.mount("/frontend", StaticFiles(directory="frontend"), name="frontend")
