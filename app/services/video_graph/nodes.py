@@ -13,11 +13,13 @@ import logging
 import re
 from typing import Any
 
+from app.services.video_graph.event_bus import publish_event
 from app.services.video_graph.state import (
     ConfigParams,
     ScriptSegment,
     VideoGenerationState,
 )
+from app.services.video_graph.view_state import format_segments_for_view
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +37,18 @@ DEFAULT_CONFIG: ConfigParams = {
 # ──────────────────────────────────────────────
 # 节点 A：意图识别与参数提取
 # ──────────────────────────────────────────────
-def parse_intent(state: VideoGenerationState) -> dict[str, Any]:
+async def parse_intent(state: VideoGenerationState) -> dict[str, Any]:
     """
     解析用户输入，确定 generation_mode、提取 config_params、
     验证图片 URL、处理音频对话格式。
     """
+    thread_id = state.get("thread_id", "")
+    await publish_event(thread_id, "progress", {
+        "progress": 8,
+        "message": "正在识别需求与参数…",
+        "step": "parse_intent_running",
+    })
+
     mode = state.get("generation_mode", "text_to_video")
     media = state.get("media_assets") or {}
     user_config = state.get("config_params") or {}
@@ -53,10 +62,9 @@ def parse_intent(state: VideoGenerationState) -> dict[str, Any]:
 
         has_images = bool(ref_image_urls or first_frame_url)
         if not has_images:
-            return {
-                "current_step": "error",
-                "error": f"模式 {mode} 需要提供图片 URL，请上传图片后重试。",
-            }
+            err = f"模式 {mode} 需要提供图片 URL，请上传图片后重试。"
+            await publish_event(thread_id, "error", {"message": err})
+            return {"current_step": "error", "error": err}
     else:
         ref_image_urls = []
         first_frame_url = None
@@ -76,6 +84,12 @@ def parse_intent(state: VideoGenerationState) -> dict[str, Any]:
         if fixed != user_input:
             audio_fixed = True
             user_input = fixed
+
+    await publish_event(thread_id, "progress", {
+        "progress": 20,
+        "message": "参数解析完成，开始构思分镜…",
+        "step": "parse_intent_done",
+    })
 
     return {
         "parsed_mode": mode,
@@ -158,6 +172,13 @@ async def plan_script(state: VideoGenerationState) -> dict[str, Any]:
     """
     from app.services.video_graph.llm_utils import call_script_planner
 
+    thread_id = state.get("thread_id", "")
+    await publish_event(thread_id, "progress", {
+        "progress": 35,
+        "message": "AI 正在构思视频分镜…",
+        "step": "plan_script_running",
+    })
+
     trend = state.get("trend", {})
     brand = state.get("brand", {})
     product = state.get("product", {})
@@ -182,12 +203,18 @@ async def plan_script(state: VideoGenerationState) -> dict[str, Any]:
         )
     except Exception as e:
         logger.exception("LLM 剧情规划失败")
+        await publish_event(thread_id, "error", {"message": f"剧情规划失败: {e}"})
         return {"current_step": "error", "error": f"剧情规划失败: {e}"}
+
+    await publish_event(thread_id, "progress", {
+        "progress": 48,
+        "message": "剧本草稿已生成，正在做标准化与翻译…",
+    })
 
     segments: list[ScriptSegment] = result.get("segments", [])
     normalized_segments: list[ScriptSegment] = []
     try:
-        for seg in segments:
+        for idx, seg in enumerate(segments, start=1):
             normalized_segments.append(
                 await _prepare_segment_for_submission(
                     seg,
@@ -195,8 +222,14 @@ async def plan_script(state: VideoGenerationState) -> dict[str, Any]:
                     generate_audio=generate_audio,
                 )
             )
+            # 颗粒度更细的进度：每个片段完成后广播一次
+            await publish_event(thread_id, "segment_done", {
+                "index": idx,
+                "total": len(segments),
+            })
     except Exception as e:
         logger.exception("剧本标准化失败")
+        await publish_event(thread_id, "error", {"message": f"剧本标准化失败: {e}"})
         return {"current_step": "error", "error": f"剧本标准化失败: {e}"}
 
     total_dur = sum(s.get("duration", 5) for s in normalized_segments)
@@ -204,6 +237,12 @@ async def plan_script(state: VideoGenerationState) -> dict[str, Any]:
         s.get("mode") == "frame_interpolation" for s in normalized_segments[1:]
     )
     strategy = "sequential" if has_frame_dep else "parallel"
+
+    await publish_event(thread_id, "progress", {
+        "progress": 55,
+        "message": "分镜草稿生成完毕，等待您审阅",
+        "step": "plan_script_done",
+    })
 
     return {
         "script_segments": normalized_segments,
@@ -218,11 +257,26 @@ async def plan_script(state: VideoGenerationState) -> dict[str, Any]:
 # ──────────────────────────────────────────────
 # 节点 C：人机交互（interrupt 前的数据准备）
 # ──────────────────────────────────────────────
-def present_to_human(state: VideoGenerationState) -> dict[str, Any]:
+async def present_to_human(state: VideoGenerationState) -> dict[str, Any]:
     """
     将 script_segments 整理为前端可渲染的格式。
     此节点执行完后，Graph 会被 interrupt，等待人类输入。
+
+    本节点会主动推送 `human_action_required` 事件，让前端弹出交互 UI。
     """
+    thread_id = state.get("thread_id", "")
+    config = state.get("parsed_config") or {}
+    language = config.get("language", "zh")
+    segments = state.get("script_segments") or []
+
+    await publish_event(thread_id, "human_action_required", {
+        "message": "请审阅剧本草稿并确认 / 修改 / 反馈",
+        "segments": format_segments_for_view(segments, language),
+        "total_duration": state.get("total_duration", 0),
+        "execution_strategy": state.get("execution_strategy", "parallel"),
+        "revision_count": state.get("revision_count", 0),
+    })
+
     return {
         "current_step": "waiting_human",
         "human_action": None,
@@ -249,6 +303,13 @@ def route_human_action(state: VideoGenerationState) -> str:
 # ──────────────────────────────────────────────
 async def apply_edit(state: VideoGenerationState) -> dict[str, Any]:
     """用户手动修改了部分 segment，直接替换。"""
+    thread_id = state.get("thread_id", "")
+    await publish_event(thread_id, "progress", {
+        "progress": 62,
+        "message": "正在应用您的编辑…",
+        "step": "apply_edit_running",
+    })
+
     edited = state.get("human_edited_segments")
     if not edited:
         return {"current_step": "waiting_human"}
@@ -270,6 +331,9 @@ async def apply_edit(state: VideoGenerationState) -> dict[str, Any]:
                 )
             except Exception as e:
                 logger.exception("用户编辑片段标准化失败: segment=%s", sid)
+                await publish_event(thread_id, "error", {
+                    "message": f"编辑片段标准化失败(segment={sid}): {e}"
+                })
                 return {
                     "current_step": "error",
                     "error": f"编辑片段标准化失败(segment={sid}): {e}",
@@ -290,15 +354,21 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
     """根据用户反馈让 LLM 重写指定 segment 或整体。"""
     from app.services.video_graph.llm_utils import call_script_reviser
 
+    thread_id = state.get("thread_id", "")
+    await publish_event(thread_id, "progress", {
+        "progress": 70,
+        "message": "AI 正在根据您的反馈重写剧本…",
+        "step": "revise_script_running",
+    })
+
     feedback = state.get("human_feedback", "")
     segments = state.get("script_segments", [])
     revision_count = state.get("revision_count", 0)
 
     if revision_count >= 5:
-        return {
-            "current_step": "error",
-            "error": "已达到最大修改轮次(5次)，请直接编辑后确认。",
-        }
+        err = "已达到最大修改轮次(5次)，请直接编辑后确认。"
+        await publish_event(thread_id, "error", {"message": err})
+        return {"current_step": "error", "error": err}
 
     config = state.get("parsed_config", DEFAULT_CONFIG)
     generate_audio = config.get("generate_audio", True)
@@ -316,12 +386,13 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
         )
     except Exception as e:
         logger.exception("LLM 剧本修改失败")
+        await publish_event(thread_id, "error", {"message": f"剧本修改失败: {e}"})
         return {"current_step": "error", "error": f"剧本修改失败: {e}"}
 
     new_segments: list[ScriptSegment] = revised.get("segments", segments)
     normalized_segments: list[ScriptSegment] = []
     try:
-        for seg in new_segments:
+        for idx, seg in enumerate(new_segments, start=1):
             normalized_segments.append(
                 await _prepare_segment_for_submission(
                     seg,
@@ -329,8 +400,14 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
                     generate_audio=generate_audio,
                 )
             )
+            await publish_event(thread_id, "segment_done", {
+                "index": idx,
+                "total": len(new_segments),
+                "phase": "revise",
+            })
     except Exception as e:
         logger.exception("重写后剧本标准化失败")
+        await publish_event(thread_id, "error", {"message": f"重写后剧本标准化失败: {e}"})
         return {"current_step": "error", "error": f"重写后剧本标准化失败: {e}"}
 
     total_dur = sum(s.get("duration", 5) for s in normalized_segments)
@@ -360,6 +437,13 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
     from app.services.video_graph.payload_builder import build_payload_for_segment
     from app.services.seedance_client import create_seedance_video_task
     from app.db.redis import get_redis_client
+
+    thread_id = state.get("thread_id", "")
+    await publish_event(thread_id, "progress", {
+        "progress": 85,
+        "message": "正在向视频生成引擎提交任务…",
+        "step": "assemble_and_submit_running",
+    })
 
     segments = state.get("script_segments", [])
     config = state.get("parsed_config", DEFAULT_CONFIG)
@@ -442,6 +526,11 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
         task_results = list(task_results)
 
     all_ok = all(r.get("status") != "failed" for r in task_results)
+    await publish_event(thread_id, "progress", {
+        "progress": 95,
+        "message": "任务已提交，正在登记生成记录…",
+        "step": "submitted",
+    })
     return {
         "task_results": task_results,
         "final_status": "submitted" if all_ok else "partial_failure",
@@ -504,6 +593,7 @@ async def respond(state: VideoGenerationState) -> dict[str, Any]:
                 logger.warning("WS 推送初始状态失败: generation_id=%s", gen.id)
     except Exception as e:
         logger.exception("写入 Generation 记录失败")
+        await publish_event(state.get("thread_id", ""), "error", {"message": str(e)})
         return {
             "task_results": task_results,
             "final_status": "db_error",
@@ -513,8 +603,15 @@ async def respond(state: VideoGenerationState) -> dict[str, Any]:
     finally:
         db.close()
 
+    final_status = state.get("final_status", "submitted")
+    await publish_event(state.get("thread_id", ""), "done", {
+        "message": "视频生成任务已成功提交",
+        "final_status": final_status,
+        "task_results": task_results,
+        "generation_ids": generation_ids,
+    })
     return {
         "task_results": task_results,
-        "final_status": state.get("final_status", "submitted"),
+        "final_status": final_status,
         "current_step": "done",
     }

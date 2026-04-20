@@ -40,7 +40,15 @@ class TaskResult(TypedDict, total=False):
 
 
 class VideoGenerationState(TypedDict, total=False):
-    """Graph 全局状态，贯穿整个视频生成工作流。"""
+    """Graph 全局状态，贯穿整个视频生成工作流。
+
+    职责：作为"后端运行态"，保留所有节点需要的上下文。
+    不直接作为 API 响应返回给前端，
+    经 `app.services.video_graph.view_state.map_graph_state_to_view` 转换。
+    """
+
+    # ---- 会话标识（用于 SSE 事件总线路由） ----
+    thread_id: str
 
     # ---- 输入（创建 thread 时由 API 层写入） ----
     user_input: str
