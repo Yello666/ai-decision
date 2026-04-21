@@ -13,6 +13,7 @@ class Generation(Base):
 
     type = Column(String(16), nullable=False, index=True)  # video | text
     status = Column(String(32), nullable=False, default="pending", index=True)  # queued | running | succeeded | failed | expired | canceled
+    thread_id = Column(String(64), nullable=True, index=True)  # 所属视频生成会话 ID（仅视频 thread 任务有值）
 
     prompt_used = Column(Text, nullable=False)  # 实际发给模型/API 的 prompt
     trend_snapshot = Column(JSON, nullable=True)   # TrendObject 快照

@@ -113,6 +113,7 @@ class GenerationOut(BaseModel):
     shopify_store_id: str
     type: str  # video | image | text
     status: str
+    thread_id: Optional[str] = None
     prompt_used: Optional[str] = None
     trend_snapshot: Optional[dict] = None
     brand_snapshot: Optional[dict] = None

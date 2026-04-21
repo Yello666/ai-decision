@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS generations (
   shopify_store_id VARCHAR(64) NOT NULL COMMENT '所属店铺 ID，多租户隔离',
   type VARCHAR(16) NOT NULL COMMENT '任务类型：video | text',
   status VARCHAR(32) NOT NULL DEFAULT 'queued' COMMENT '状态：queued | running | succeeded | failed ｜ expired ',
+  thread_id VARCHAR(64) NULL COMMENT '所属视频生成会话 ID（仅视频 thread 任务有值）',
   prompt_used TEXT NOT NULL COMMENT '实际发给模型/API 的 prompt',
   trend_snapshot JSON NULL COMMENT '发起任务时的热点快照（TrendObject）',
   brand_snapshot JSON NULL COMMENT '发起任务时的品牌快照（BrandObject）',
@@ -16,5 +17,6 @@ CREATE TABLE IF NOT EXISTS generations (
   INDEX idx_generations_store_id (shopify_store_id),
   INDEX idx_generations_type (type),
   INDEX idx_generations_status (status),
+  INDEX idx_generations_thread_id (thread_id),
   INDEX idx_generations_external_id (external_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='内容生成任务表';

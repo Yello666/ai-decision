@@ -10,6 +10,7 @@ from .generation_service import (
     get_generation_by_external_id,
     handle_video_task_callback,
     list_generations,
+    list_generations_by_thread_id,
     refresh_video_status,
 )
 
@@ -26,5 +27,6 @@ __all__ = [
     "get_generation_by_external_id",
     "handle_video_task_callback",
     "list_generations",
+    "list_generations_by_thread_id",
     "refresh_video_status",
 ]

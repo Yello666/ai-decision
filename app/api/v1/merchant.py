@@ -58,22 +58,22 @@ def set_brand_info(
     return success(res)
 
 
-#登录之后更新Brand信息
-@router.put("/brand-info")
-def update_brand_info(
-        brand_object: BrandUpdate,
-        current_merchant: Merchant = Depends(get_current_merchant),
-        db: Session = Depends(get_db)
-):
-    # 使用 exclude_unset=True 实现部分更新
-    update_data = brand_object.model_dump(exclude_unset=True, by_alias=True)
-    brand = create_or_update_brand(db, current_merchant, update_data)
-    
-    res = BrandObject(
-        name=brand.name,
-        core_value=brand.core_value,
-        mainly_sold_products=brand.mainly_sold_products,
-        tone=brand.tone,
-        audience=brand.audience.split(",") if brand.audience else []
-    )
-    return success(res)
+# #登录之后更新Brand信息
+# @router.put("/brand-info")
+# def update_brand_info(
+#         brand_object: BrandUpdate,
+#         current_merchant: Merchant = Depends(get_current_merchant),
+#         db: Session = Depends(get_db)
+# ):
+#     # 使用 exclude_unset=True 实现部分更新
+#     update_data = brand_object.model_dump(exclude_unset=True, by_alias=True)
+#     brand = create_or_update_brand(db, current_merchant, update_data)
+#
+#     res = BrandObject(
+#         name=brand.name,
+#         core_value=brand.core_value,
+#         mainly_sold_products=brand.mainly_sold_products,
+#         tone=brand.tone,
+#         audience=brand.audience.split(",") if brand.audience else []
+#     )
+#     return success(res)

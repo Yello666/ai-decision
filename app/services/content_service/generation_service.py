@@ -340,6 +340,23 @@ def get_generation_by_id(db: Session, generation_id: int, shopify_store_id: str)
     )
 
 
+def list_generations_by_thread_id(
+    db: Session,
+    thread_id: str,
+    shopify_store_id: str,
+) -> list[Generation]:
+    """根据视频生成会话 thread_id 查询该会话下所有 Generation 记录（按店铺隔离）。"""
+    return (
+        db.query(Generation)
+        .filter(
+            Generation.thread_id == thread_id,
+            Generation.shopify_store_id == shopify_store_id,
+        )
+        .order_by(Generation.id.asc())
+        .all()
+    )
+
+
 def list_generations(
     db: Session,
     shopify_store_id: str,

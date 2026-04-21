@@ -1,20 +1,5 @@
 """
 Per-thread 事件总线 —— SSE 推送管道。
-
-设计要点:
-  - Key 为 thread_id，Value 为 1..N 个 asyncio.Queue（一个订阅者一个 Queue，支持多端同时订阅）。
-  - 后端节点通过 publish(thread_id, event, data) 把进度事件喂给总线。
-  - SSE 路由通过 subscribe() 拿到自己的 Queue，for-ever 消费。
-  - 总线只做"实时感"，不负责持久化；断线重连由前端先拉 /state 兜底。
-
-为什么不直接用 LangGraph 原生 astream？
-  1. 我们需要自定义事件类型（segment_done / human_action_required），astream 难以表达；
-  2. Graph 在 interrupt 后会退出 async 调用栈，但 SSE 订阅要跨 /create 与 /resume 存活，
-     需要一个独立于 Graph 生命周期的中间管道。
-
-注意:
-  - 这是进程内实现，适合单副本部署。多副本需替换为 Redis Pub/Sub。
-  - publish 使用 put_nowait；Queue 满时直接丢弃最旧事件，保证发布端永远非阻塞。
 """
 from __future__ import annotations
 
