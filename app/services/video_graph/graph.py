@@ -78,6 +78,7 @@ def build_video_graph() -> StateGraph:
     # ── 边: set_waiting_human → human_interrupt ──
     graph.add_edge("set_waiting_human", "human_interrupt")
 
+
     # ── 边: human_interrupt → 条件路由 ──
     graph.add_conditional_edges(
         "human_interrupt",
@@ -106,6 +107,7 @@ def build_video_graph() -> StateGraph:
     graph.add_edge("respond", END)
 
     return graph
+
 
 
 @lru_cache(maxsize=1)
