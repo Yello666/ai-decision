@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+from typing import Optional
 
 from fastapi import HTTPException, WebSocket, WebSocketDisconnect
 from httpx import HTTPStatusError
@@ -15,7 +16,7 @@ from app.core.security import decode_access_token
 from app.db.redis import get_redis_client
 from app.models import Generation
 from app.schemas.content import VideoTaskCallbackRequest, VideoTaskStatusResponse
-from app.services.content_service import handle_video_task_callback
+from app.services.generation_service import handle_video_task_callback
 from app.services.notification_service import publish_generation_status
 from app.services.seedance_client import create_seedance_video_task, query_seedance_video_task
 from app.services.video_graph.payload_builder import build_payload_for_segment
@@ -146,10 +147,14 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, last_fr
         logger.warning("串行续传 WS 推送失败: generation_id=%s", gen.id)
 
 
-async def handle_generation_status_ws(websocket: WebSocket, token: str) -> None:
+async def handle_generation_status_ws(websocket: WebSocket, token: Optional[str]) -> None:
     settings = get_settings()
     heartbeat_interval = settings.WS_HEARTBEAT_INTERVAL_SECONDS
     pong_timeout = settings.WS_PONG_TIMEOUT_SECONDS
+
+    if not token:
+        await websocket.close(code=WS_CLOSE_INVALID_TOKEN, reason="invalid_token")
+        return
 
     try:
         payload = decode_access_token(token)

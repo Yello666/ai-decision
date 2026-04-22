@@ -126,7 +126,9 @@ async def call_script_planner(
     user_msg_parts.append(f"[Brand] name: {brand.get('name', '')}, tone: {brand.get('tone', '')}, products: {brand.get('mainly_sold_products', brand.get('industry', ''))}")
     if brand.get("core_value"):
         user_msg_parts.append(f"[Brand Slogan] {brand['core_value']}")
+    # TODO 这里就算product带了variant，也不会读取variant的信息（应该不管是product还是variant，都只提取name、description、price这些信息，再传入，）
     user_msg_parts.append(f"[Product] {product.get('name', '')}: {product.get('description', '')}, price: {product.get('price', '')}$")
+    # TODO 这里会主动传递product的url，有必要吗？？？
     if product.get("image_url"):
         user_msg_parts.append(f"[Product Image] {product['image_url']}")
     user_msg_parts.append(f"[User Idea] {user_input or '(no specific idea, use your creativity)'}")

@@ -8,6 +8,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
+from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
 from app.models import Merchant
@@ -26,7 +27,8 @@ from app.services.video_graph.view_state import FrontendViewState, map_graph_sta
 logger = logging.getLogger(__name__)
 
 _RUNNING_TASKS: dict[str, asyncio.Task] = {}
-_THREAD_OWNERS: dict[str, str] = {}
+
+_THREAD_OWNERS: dict[str, str] = {} #标记每一个thread_id所属的store_id
 
 # 允许修改全局视频参数的阶段。
 # 设计原则：parse_intent 尚未完成前不能改（parsed_* 还未生成）；
@@ -215,11 +217,10 @@ async def _run_graph_in_background(
             await graph.ainvoke(resume_command, config=config)
         else:
             await graph.ainvoke(initial_state or {}, config=config)
+    except GraphInterrupt:
+        logger.info("Graph paused at interrupt: %s", thread_id)
+        return
     except Exception as exc:
-        exc_name = type(exc).__name__.lower()
-        if "interrupt" in exc_name:
-            logger.info("Graph paused at interrupt: %s", thread_id)
-            return
         logger.exception("Graph run failed: %s", thread_id)
         await publish_event(thread_id, "error", {"message": f"工作流执行失败: {exc}"})
 
@@ -237,7 +238,7 @@ async def create_thread_task(payload: CreateThreadRequest, merchant: Merchant) -
         "media_assets": payload.media_assets.model_dump(mode="json") if payload.media_assets else {},
         "config_params": payload.config_params.model_dump(mode="json") if payload.config_params else {},
         "shopify_store_id": merchant.shopify_store_id,
-        "revision_count": 0,
+        "revision_count": 0, #视频脚本最大修改轮次（10次，超过这个次数，将提示用户已达最大上下文？让用户直接编辑然后执行）
         "current_step": "initializing",
     }
 
@@ -246,15 +247,18 @@ async def create_thread_task(payload: CreateThreadRequest, merchant: Merchant) -
     graph = get_graph()
     config = {"configurable": {"thread_id": thread_id}}
     try:
+        # a代表async异步
         await graph.aupdate_state(config, initial_state)
     except Exception:
         logger.warning("aupdate_state failed, fallback owner map: %s", thread_id, exc_info=True)
 
-    await publish_event(
-        thread_id,
-        "progress",
-        {"progress": 2, "message": "任务初始化中…", "step": "initializing"},
-    )
+    # 这里不需要向前端推送，因为只能拿到thread_id之后才可以建立SSE连接
+    # 在这个接口结束之后，才会拿到thread_id，建立SSE连接
+    # await publish_event(
+    #     thread_id,
+    #     "progress",
+    #     {"progress": 2, "message": "任务初始化中…", "step": "initializing"},
+    # )
 
     task = asyncio.create_task(
         _run_graph_in_background(thread_id, initial_state=initial_state),
@@ -264,8 +268,7 @@ async def create_thread_task(payload: CreateThreadRequest, merchant: Merchant) -
 
     return {
         "thread_id": thread_id,
-        "stream_url": f"/video-thread/{thread_id}/stream",
-        "state_url": f"/video-thread/{thread_id}/state",
+        # 因为没有SSE推送，所以在这里返回view。
         "view": FrontendViewState(
             status="running",
             message="任务初始化中…",
@@ -274,7 +277,7 @@ async def create_thread_task(payload: CreateThreadRequest, merchant: Merchant) -
         ).model_dump(),
     }
 
-
+# 注入人类决策，恢复Graph执行
 async def resume_thread_task(
     thread_id: str,
     payload: ResumeThreadRequest,
@@ -283,6 +286,7 @@ async def resume_thread_task(
     state = await _load_state_with_auth(thread_id, merchant)
     if state.get("current_step") in (None, "initializing"):
         raise HTTPException(status_code=409, detail="thread_not_ready_for_resume")
+    # 防止task还没有结束，就调用恢复接口
     if _is_running(thread_id):
         raise HTTPException(status_code=409, detail="thread_is_busy")
 
@@ -291,6 +295,7 @@ async def resume_thread_task(
         or payload.media_assets is not None
         or payload.generation_mode is not None
     )
+    # 允许修改视频参数
     if has_param_override:
         if state.get("current_step") not in _PARAM_EDITABLE_STEPS:
             raise HTTPException(status_code=409, detail="params_not_editable_in_current_step")
@@ -303,23 +308,20 @@ async def resume_thread_task(
         )
 
     human_input = {
-        "action": payload.action,
-        "edited_segments": [s.model_dump(exclude_none=True) for s in payload.edited_segments],
-        "feedback": payload.feedback,
+        "human_action": payload.action,
+        "human_edited_segments": [s.model_dump(exclude_none=True) for s in payload.edited_segments],
+        "human_feedback": payload.feedback,
     }
-    await publish_event(
-        thread_id,
-        "progress",
-        {"progress": 60, "message": "已收到您的反馈，正在处理…", "step": "human_responded"},
-    )
+    # 再次新建task执行graph，因为之前的task已经停止并回收了，需要重新开始执行
     task = asyncio.create_task(
-        _run_graph_in_background(thread_id, resume_command=Command(resume=human_input)),
+        _run_graph_in_background(thread_id, resume_command=Command(resume=human_input)), 
         name=f"video-thread:{thread_id}:resume",
     )
+    # resume=human_input是将上面的human_input作为intterupt函数的返回值
     _register_task(thread_id, task)
     return {
         "thread_id": thread_id,
-        "accepted_action": payload.action,
+        "human_action": payload.action,
         "view": FrontendViewState(
             status="running",
             message="已收到您的反馈，正在处理…",

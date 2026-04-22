@@ -12,13 +12,13 @@ from openai import APIConnectionError, APITimeoutError, AsyncOpenAI
 
 from app.core.config import get_settings
 from app.schemas.content import TrendProductVideoRequest
-from app.services.content_service.prompt_templates import build_trend_product_video_prompt
+from app.services.generation_service.prompt_templates import build_trend_product_video_prompt
 
 logger = logging.getLogger(__name__)
 
 _MODEL_TEXT_VIDEO = "ep-20260330165459-vmz9x"
 _MODEL_REF_VIDEO = "ep-20260331152207-2n5zd"
-_CALLBACK_URL = "https://shop-ai.xin/api/v1/generate/callback"
+_CALLBACK_URL = "https://shop-ai.xin/api/v1/video-thread/callback"
 
 
 def _get_llm_client() -> AsyncOpenAI:

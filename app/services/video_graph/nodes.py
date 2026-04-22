@@ -3,15 +3,18 @@ LangGraph 视频生成编排系统 —— 节点实现。
 
 节点 A: parse_intent        意图识别与参数提取
 节点 B: plan_script         剧情规划与 Prompt 工程
-节点 C: present_to_human    人机交互中断点（interrupt）
-节点 D: assemble_and_submit API 组装与执行
-节点 E: respond             响应与回调监听入口
+节点 C: set_waiting_human    设置current_step为“waiting_human”准备进入中断节点
+节点 D: human_interrupt     调用interrupt中断状态机的执行
+节点 E: assemble_and_submit API 组装与执行
+节点 F: respond             响应与回调监听入口
 """
 from __future__ import annotations
 
 import logging
 import re
 from typing import Any
+
+from langgraph.types import interrupt
 
 from app.services.video_graph.event_bus import publish_event
 from app.services.video_graph.state import (
@@ -26,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 MAX_SEGMENT_DURATION = 12
 MIN_SEGMENT_DURATION = 4  # seedance 1.5 pro 官方下限
+MAX_REVISION_COUNT = 10  # 视频脚本最大修改轮次
 
 
 # ──────────────────────────────────────────────
@@ -37,6 +41,9 @@ async def parse_intent(state: VideoGenerationState) -> dict[str, Any]:
     验证图片 URL、处理音频对话格式。
     """
     thread_id = state.get("thread_id", "")
+    # 就算前端此时还没有建立SSE连接也没关系。前端只需要显示当前正在进行的事件。
+    # 只需要显示连接上的时候，正在进行的事件即可。前面的事件丢失了也没关系
+    #因为不是前面的事件不是实时事件是旧事件，没必要显示
     await publish_event(thread_id, "progress", {
         "progress": 8,
         "message": "正在识别需求与参数…",
@@ -94,7 +101,7 @@ async def parse_intent(state: VideoGenerationState) -> dict[str, Any]:
         "current_step": "parse_intent_done",
     }
 
-
+# 只对英文文本生效
 def _fix_dialogue_quotes(text: str) -> str:
     """标准化引号并尽量将未加引号的对白包裹为英文双引号。"""
     fixed = text.replace("\u201c", '"').replace("\u201d", '"')
@@ -140,8 +147,6 @@ async def _prepare_segment_for_submission(
     if generate_audio:
         if desc:
             desc = _fix_dialogue_quotes(desc)
-        if desc_zh:
-            desc_zh = _fix_dialogue_quotes(desc_zh)
 
     if not _looks_like_english(desc):
         source = desc_zh or desc
@@ -203,6 +208,7 @@ async def plan_script(state: VideoGenerationState) -> dict[str, Any]:
     await publish_event(thread_id, "progress", {
         "progress": 48,
         "message": "剧本草稿已生成，正在做标准化与翻译…",
+        "step": "plan_script_running",
     })
 
     segments: list[ScriptSegment] = result.get("segments", [])
@@ -216,18 +222,18 @@ async def plan_script(state: VideoGenerationState) -> dict[str, Any]:
                     generate_audio=generate_audio,
                 )
             )
-            # 颗粒度更细的进度：每个片段完成后广播一次
-            await publish_event(thread_id, "segment_done", {
-                "index": idx,
-                "total": len(segments),
-            })
+            # # 颗粒度更细的进度：每个片段完成后广播一次--没必要
+            # await publish_event(thread_id, "segment_done", {
+            #     "index": idx,
+            #     "total": len(segments),
+            # })
     except Exception as e:
         logger.exception("剧本标准化失败")
         await publish_event(thread_id, "error", {"message": f"剧本标准化失败: {e}"})
         return {"current_step": "error", "error": f"剧本标准化失败: {e}"}
 
-    total_dur = sum(s.get("duration", 5) for s in normalized_segments)
-    has_frame_dep = any(
+    total_dur = sum(s.get("duration", 5) for s in normalized_segments) #把所有片段的时长加起来计算出总时长
+    has_frame_dep = any( #如果片段中有frame_interpolation模式，则执行策略为sequential，否则为parallel
         s.get("mode") == "frame_interpolation" for s in normalized_segments[1:]
     )
     strategy = "sequential" if has_frame_dep else "parallel"
@@ -243,40 +249,61 @@ async def plan_script(state: VideoGenerationState) -> dict[str, Any]:
         "total_duration": total_dur,
         "execution_strategy": strategy,
         "optimized_prompt": result.get("optimized_prompt", ""),
-        "current_step": "plan_script_done",
+        "current_step": "plan_script_done", #这里的step不是节点名称，而是后端任务状态。
         "revision_count": state.get("revision_count", 0),
     }
 
 
 # ──────────────────────────────────────────────
-# 节点 C：人机交互（interrupt 前的数据准备）
+# 节点 C：人机交互（interrupt 前的状态转换）
 # ──────────────────────────────────────────────
-async def present_to_human(state: VideoGenerationState) -> dict[str, Any]:
+async def set_waiting_human(state: VideoGenerationState) -> dict[str, Any]:
     """
-    将 script_segments 整理为前端可渲染的格式。
-    此节点执行完后，Graph 会被 interrupt，等待人类输入。
-
-    本节点会主动推送 `human_action_required` 事件，让前端弹出交互 UI。
+    将curent_step设置为waiting_human，等待人类输入。
     """
-    thread_id = state.get("thread_id", "")
-    config = state.get("parsed_config") or {}
-    language = config.get("language", "zh")
-    segments = state.get("script_segments") or []
-
-    await publish_event(thread_id, "human_action_required", {
-        "message": "请审阅剧本草稿并确认 / 修改 / 反馈",
-        "segments": format_segments_for_view(segments, language),
-        "total_duration": state.get("total_duration", 0),
-        "execution_strategy": state.get("execution_strategy", "parallel"),
-        "revision_count": state.get("revision_count", 0),
-    })
 
     return {
         "current_step": "waiting_human",
         "human_action": None,
     }
 
+def human_interrupt(state: VideoGenerationState) -> dict:
+    """
+    真正的 human-in-the-loop 中断点。
+    LangGraph 在此暂停执行，将控制权交给前端。
+    前端通过 resume 接口注入 human_action 等字段后继续。
+    """
+    segments = state.get("script_segments", [])
+    config = state.get("parsed_config", {})
+    lang = config.get("language", "zh")
 
+    display_segments = []
+    for seg in segments:
+        display_segments.append({
+            "segment_id": seg.get("segment_id"),
+            "description": seg.get("description_zh") if lang == "zh" else seg.get("description"),
+            "duration": seg.get("duration"),
+            "mode": seg.get("mode"),
+        })
+
+    # 调用interrupt函数，langgraph状态机终止执行。interrupt里面是返回给前端的字段。
+    # 前端传回的值会存到human_input里。
+    human_input = interrupt({
+        "event": "require_human_input",
+        "segments": display_segments,
+        "total_duration": state.get("total_duration", 0),
+        "execution_strategy": state.get("execution_strategy", "parallel"),
+        "revision_count": state.get("revision_count", 0),
+        "message": "请审阅剧本，选择: approve(确认生成) / edit(修改后生成) / feedback(提出意见重新生成)",
+    })
+
+    # return的值会传递给路由函数
+    return {
+        "human_action": human_input.get("human_action", "approve"),
+        "human_edited_segments": human_input.get("human_edited_segments", []),
+        "human_feedback": human_input.get("human_feedback", ""),
+        "current_step": "human_responded",
+    }
 # ──────────────────────────────────────────────
 # 人类响应路由（条件边函数）
 # ──────────────────────────────────────────────
@@ -289,7 +316,7 @@ def route_human_action(state: VideoGenerationState) -> str:
         return "apply_edit"
     elif action == "feedback":
         return "revise_script"
-    return "present_to_human"
+    return "set_waiting_human"
 
 
 # ──────────────────────────────────────────────
@@ -308,17 +335,17 @@ async def apply_edit(state: VideoGenerationState) -> dict[str, Any]:
     if not edited:
         return {"current_step": "waiting_human"}
 
-    current = list(state.get("script_segments", []))
+    current_segments = list(state.get("script_segments", []))
     edited_map = {s["segment_id"]: s for s in edited if "segment_id" in s}
     config = state.get("parsed_config", DEFAULT_CONFIG)
     generate_audio = config.get("generate_audio", True)
     language = config.get("language", "zh")
-    for i, seg in enumerate(current):
+    for i, seg in enumerate(current_segments):
         sid = seg.get("segment_id")
         if sid in edited_map:
             merged = {**seg, **edited_map[sid]}
             try:
-                current[i] = await _prepare_segment_for_submission(
+                current_segments[i] = await _prepare_segment_for_submission(
                     merged,
                     language=language,
                     generate_audio=generate_audio,
@@ -333,9 +360,9 @@ async def apply_edit(state: VideoGenerationState) -> dict[str, Any]:
                     "error": f"编辑片段标准化失败(segment={sid}): {e}",
                 }
 
-    total_dur = sum(s.get("duration", 5) for s in current)
+    total_dur = sum(s.get("duration", 5) for s in current_segments)
     return {
-        "script_segments": current,
+        "script_segments": current_segments,
         "total_duration": total_dur,
         "current_step": "plan_script_done",
     }
@@ -359,9 +386,8 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
     segments = state.get("script_segments", [])
     revision_count = state.get("revision_count", 0)
 
-    if revision_count >= 5:
-        err = "已达到最大修改轮次(5次)，请直接编辑后确认。"
-        await publish_event(thread_id, "error", {"message": err})
+    if revision_count >= MAX_REVISION_COUNT:
+        err = f"已达到最大修改轮次({MAX_REVISION_COUNT}次)，请直接编辑后确认。"
         return {"current_step": "error", "error": err}
 
     config = state.get("parsed_config", DEFAULT_CONFIG)
@@ -380,7 +406,6 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
         )
     except Exception as e:
         logger.exception("LLM 剧本修改失败")
-        await publish_event(thread_id, "error", {"message": f"剧本修改失败: {e}"})
         return {"current_step": "error", "error": f"剧本修改失败: {e}"}
 
     new_segments: list[ScriptSegment] = revised.get("segments", segments)
@@ -394,14 +419,8 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
                     generate_audio=generate_audio,
                 )
             )
-            await publish_event(thread_id, "segment_done", {
-                "index": idx,
-                "total": len(new_segments),
-                "phase": "revise",
-            })
     except Exception as e:
         logger.exception("重写后剧本标准化失败")
-        await publish_event(thread_id, "error", {"message": f"重写后剧本标准化失败: {e}"})
         return {"current_step": "error", "error": f"重写后剧本标准化失败: {e}"}
 
     total_dur = sum(s.get("duration", 5) for s in normalized_segments)
@@ -453,7 +472,7 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
                 "task_results": [],
                 "final_status": "failed",
                 "error": "无剧本片段可提交",
-                "current_step": "submitted",
+                "current_step": "error",
             }
 
         payload = build_payload_for_segment(first_seg, config)
@@ -589,7 +608,6 @@ async def respond(state: VideoGenerationState) -> dict[str, Any]:
                 logger.warning("WS 推送初始状态失败: generation_id=%s", gen.id)
     except Exception as e:
         logger.exception("写入 Generation 记录失败")
-        await publish_event(state.get("thread_id", ""), "error", {"message": str(e)})
         return {
             "task_results": task_results,
             "final_status": "db_error",
@@ -600,11 +618,10 @@ async def respond(state: VideoGenerationState) -> dict[str, Any]:
         db.close()
 
     final_status = state.get("final_status", "submitted")
-    await publish_event(state.get("thread_id", ""), "done", {
+    await publish_event(state.get("thread_id", ""), "progress", {
+        "progress": 100,
         "message": "视频生成任务已成功提交",
-        "final_status": final_status,
-        "task_results": task_results,
-        "generation_ids": generation_ids,
+        "step": "done",
     })
     return {
         "task_results": task_results,

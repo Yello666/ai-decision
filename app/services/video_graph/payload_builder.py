@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 MODEL_SEEDANCE_15_PRO = "ep-20260330165459-vmz9x"
 MODEL_SEEDANCE_LITE_I2V = "ep-20260331152207-2n5zd"  # 1.0 Lite i2v，支持 reference_image(1~4张)
-CALLBACK_URL = "https://shop-ai.xin/api/v1/generate/callback"
+CALLBACK_URL = "https://shop-ai.xin/api/v1/video-thread/callback"
 
 MAX_PROMPT_CHARS_ZH = 500
 MAX_PROMPT_WORDS_EN = 1000

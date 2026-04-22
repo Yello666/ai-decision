@@ -95,5 +95,17 @@ class VideoGenerationState(TypedDict, total=False):
     final_status: str
 
     # ---- 流程控制 ----
-    current_step: str
+    current_step: str  #流程的业务状态，不是运行到的节点名称
     error: str
+    # current_step有以下的值：
+    # initializing: 初始化
+    # parse_intent_running: 解析意图
+    # parse_intent_done: 解析意图完成
+    # plan_script_running: 生成剧本
+    # plan_script_done: 生成剧本完成
+    # waiting_human: 等待人类输入
+    # human_responded: 人类输入完成
+    # apply_edit_running: 应用编辑
+    # apply_edit_done: 应用编辑完成
+    # revise_script_running: 重新生成剧本
+    # revise_script_done: 重新生成剧本完成

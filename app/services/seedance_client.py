@@ -1,6 +1,6 @@
 """
 SeedDance 2.0 API 客户端：视频生成、图片生成、轮询视频状态（异步 httpx）。
-文档：https://seedance2.app/api/v1
+文档：https://www.volcengine.com/docs/82379/1520757?lang=zh
 """
 from __future__ import annotations
 
@@ -15,154 +15,6 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-def _headers() -> dict[str, str]:
-    settings = get_settings()
-    key = settings.SEEDANCE_API_KEY or ""
-    if not key:
-        raise ValueError("SEEDANCE_API_KEY 未配置")
-    return {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-
-
-def _base_url() -> str:
-    return get_settings().SEEDANCE_BASE_URL.rstrip("/")
-
-
-async def start_video_generation(
-    prompt: str,
-    *,
-    model: str = "doubao-seedance-1-5-pro",
-    generation_type: str = "text_to_video",
-    image_url: Optional[str] = None,
-    aspect_ratio: str = "16:9",
-    duration: float = 5,
-    resolution: str = "720p",
-) -> dict[str, Any]:
-    """
-    发起视频生成任务。返回上游 data（含 video_id）或抛出异常。
-    """
-    url = f"{_base_url()}/generate"
-    payload: dict[str, Any] = {
-        "prompt": prompt,
-        "model": model,
-        "generation_type": generation_type,
-        "aspect_ratio": aspect_ratio,
-        "duration": duration,
-        "resolution": resolution,
-    }
-    if image_url and generation_type == "image_to_video":
-        payload["image_url"] = image_url
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(url, headers=_headers(), json=payload)
-    resp.raise_for_status()
-    data = resp.json()
-    if data.get("error"):
-        err = data["error"]
-        raise RuntimeError(err.get("message", "SeedDance video generation failed"))
-    return data.get("data") or {}
-
-
-async def upload_reference_image(
-    file_content: Union[bytes, Any],
-    filename: str = "image.png",
-) -> str:
-    """
-    上传参考图到 SeedDance，返回 hosted URL。
-    用于 image_to_video 模式的 image_url 参数。
-    file_content: 文件字节内容，或带 .read() 的文件对象（同步读）。
-    """
-    settings = get_settings()
-    key = settings.SEEDANCE_API_KEY or ""
-    if not key:
-        raise ValueError("SEEDANCE_API_KEY 未配置")
-    if hasattr(file_content, "read"):
-        file_content = file_content.read()
-    url = f"{_base_url()}/upload"
-    headers = {"Authorization": f"Bearer {key}"}
-    files = {"image": (filename, file_content)}
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(url, headers=headers, files=files)
-    resp.raise_for_status()
-    data = resp.json()
-    if data.get("error"):
-        err = data["error"]
-        raise RuntimeError(err.get("message", "SeedDance upload failed"))
-    inner = data.get("data") or {}
-    result = inner.get("url") or inner.get("image_url") or data.get("url") or data.get("image_url")
-    if not result or not isinstance(result, str):
-        raise RuntimeError("SeedDance upload 未返回有效 URL")
-    return result
-
-
-async def get_video_status(video_id: str) -> dict[str, Any]:
-    """
-    查询视频生成状态。返回上游 data（含 status, video_url 等）。
-    """
-    url = f"{_base_url()}/videos/{video_id}"
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(url, headers=_headers())
-    resp.raise_for_status()
-    data = resp.json()
-    if data.get("error"):
-        err = data["error"]
-        raise RuntimeError(err.get("message", "SeedDance get video failed"))
-    return data.get("data") or {}
-
-
-async def start_image_generation(
-    prompt: str,
-    *,
-    model: Optional[str] = None,
-    resolution: str = "2k",
-    aspect_ratio: str = "1:1",
-    output_format: str = "png",
-    reference_image_urls: Optional[list[str]] = None,
-) -> dict[str, Any]:
-    """
-    发起图片生成任务。返回上游 data（可能含 task_id 或直接 image_url，以文档为准）。
-    """
-    settings = get_settings()
-    if model is None or not model.strip() or model.strip() == "nano-banana-2":
-        model = settings.SEEDANCE_IMAGE_MODEL
-    else:
-        model = model.strip()
-    url = f"{_base_url()}/generate-image"
-    payload: dict[str, Any] = {
-        "prompt": prompt,
-        "model": model,
-        "resolution": resolution,
-        "aspect_ratio": aspect_ratio,
-        "output_format": output_format,
-    }
-    valid_refs = [
-        u for u in (reference_image_urls or [])
-        if u and isinstance(u, str) and u.strip().startswith(("http://", "https://"))
-    ]
-    if valid_refs:
-        payload["images"] = valid_refs
-
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(url, headers=_headers(), json=payload)
-    if not resp.ok:
-        err_detail = resp.text
-        try:
-            err_detail = resp.json()
-        except Exception:
-            pass
-        logger.error(
-            "SeedDance generate-image failed: status=%s body=%s payload_prompt_len=%s",
-            resp.status_code, err_detail, len(prompt),
-        )
-        resp.raise_for_status()
-    data = resp.json()
-    if data.get("error"):
-        err = data["error"]
-        raise RuntimeError(err.get("message", "SeedDance image generation failed"))
-    return data.get("data") or {}
 
 
 # ==========================================================
@@ -251,3 +103,154 @@ async def query_seedance_video_task(task_id: str) -> dict[str, Any]:
     return resp.json()
 
 
+
+# def _headers() -> dict[str, str]:
+#     settings = get_settings()
+#     key = settings.SEEDANCE_API_KEY or ""
+#     if not key:
+#         raise ValueError("SEEDANCE_API_KEY 未配置")
+#     return {
+#         "Authorization": f"Bearer {key}",
+#         "Content-Type": "application/json",
+#     }
+
+
+
+# async def start_video_generation(
+#     prompt: str,
+#     *,
+#     model: str = "doubao-seedance-1-5-pro",
+#     generation_type: str = "text_to_video",
+#     image_url: Optional[str] = None,
+#     aspect_ratio: str = "16:9",
+#     duration: float = 5,
+#     resolution: str = "720p",
+# ) -> dict[str, Any]:
+#     """
+#     发起视频生成任务。返回上游 data（含 video_id）或抛出异常。
+#     """
+#     url = f"{_base_url()}/generate"
+#     payload: dict[str, Any] = {
+#         "prompt": prompt,
+#         "model": model,
+#         "generation_type": generation_type,
+#         "aspect_ratio": aspect_ratio,
+#         "duration": duration,
+#         "resolution": resolution,
+#     }
+#     if image_url and generation_type == "image_to_video":
+#         payload["image_url"] = image_url
+
+#     async with httpx.AsyncClient(timeout=30) as client:
+#         resp = await client.post(url, headers=_headers(), json=payload)
+#     resp.raise_for_status()
+#     data = resp.json()
+#     if data.get("error"):
+#         err = data["error"]
+#         raise RuntimeError(err.get("message", "SeedDance video generation failed"))
+#     return data.get("data") or {}
+
+
+
+# async def get_video_status(video_id: str) -> dict[str, Any]:
+#     """
+#     查询视频生成状态。返回上游 data（含 status, video_url 等）。
+#     """
+#     url = f"{_base_url()}/videos/{video_id}"
+#     async with httpx.AsyncClient(timeout=15) as client:
+#         resp = await client.get(url, headers=_headers())
+#     resp.raise_for_status()
+#     data = resp.json()
+#     if data.get("error"):
+#         err = data["error"]
+#         raise RuntimeError(err.get("message", "SeedDance get video failed"))
+#     return data.get("data") or {}
+
+
+# async def start_image_generation(
+#     prompt: str,
+#     *,
+#     model: Optional[str] = None,
+#     resolution: str = "2k",
+#     aspect_ratio: str = "1:1",
+#     output_format: str = "png",
+#     reference_image_urls: Optional[list[str]] = None,
+# ) -> dict[str, Any]:
+#     """
+#     发起图片生成任务。返回上游 data（可能含 task_id 或直接 image_url，以文档为准）。
+#     """
+#     settings = get_settings()
+#     if model is None or not model.strip() or model.strip() == "nano-banana-2":
+#         model = settings.SEEDANCE_IMAGE_MODEL
+#     else:
+#         model = model.strip()
+#     url = f"{_base_url()}/generate-image"
+#     payload: dict[str, Any] = {
+#         "prompt": prompt,
+#         "model": model,
+#         "resolution": resolution,
+#         "aspect_ratio": aspect_ratio,
+#         "output_format": output_format,
+#     }
+#     valid_refs = [
+#         u for u in (reference_image_urls or [])
+#         if u and isinstance(u, str) and u.strip().startswith(("http://", "https://"))
+#     ]
+#     if valid_refs:
+#         payload["images"] = valid_refs
+
+#     async with httpx.AsyncClient(timeout=60) as client:
+#         resp = await client.post(url, headers=_headers(), json=payload)
+#     if not resp.ok:
+#         err_detail = resp.text
+#         try:
+#             err_detail = resp.json()
+#         except Exception:
+#             pass
+#         logger.error(
+#             "SeedDance generate-image failed: status=%s body=%s payload_prompt_len=%s",
+#             resp.status_code, err_detail, len(prompt),
+#         )
+#         resp.raise_for_status()
+#     data = resp.json()
+#     if data.get("error"):
+#         err = data["error"]
+#         raise RuntimeError(err.get("message", "SeedDance image generation failed"))
+#     return data.get("data") or {}
+
+
+# def _base_url() -> str:
+#     return get_settings().SEEDANCE_BASE_URL.rstrip("/")
+
+#
+# async def upload_reference_image(
+#     file_content: Union[bytes, Any],
+#     filename: str = "image.png",
+# ) -> str:
+#     """
+#     上传参考图到 SeedDance，返回 hosted URL。
+#     用于 image_to_video 模式的 image_url 参数。
+#     file_content: 文件字节内容，或带 .read() 的文件对象（同步读）。
+#     """
+#     settings = get_settings()
+#     key = settings.SEEDANCE_API_KEY or ""
+#     if not key:
+#         raise ValueError("SEEDANCE_API_KEY 未配置")
+#     if hasattr(file_content, "read"):
+#         file_content = file_content.read()
+#     url = f"{_base_url()}/upload"
+#     headers = {"Authorization": f"Bearer {key}"}
+#     files = {"image": (filename, file_content)}
+#
+#     async with httpx.AsyncClient(timeout=30) as client:
+#         resp = await client.post(url, headers=headers, files=files)
+#     resp.raise_for_status()
+#     data = resp.json()
+#     if data.get("error"):
+#         err = data["error"]
+#         raise RuntimeError(err.get("message", "SeedDance upload failed"))
+#     inner = data.get("data") or {}
+#     result = inner.get("url") or inner.get("image_url") or data.get("url") or data.get("image_url")
+#     if not result or not isinstance(result, str):
+#         raise RuntimeError("SeedDance upload 未返回有效 URL")
+#     return result

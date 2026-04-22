@@ -14,8 +14,7 @@ from app.services.hostpot_service.analysis_cache import (
     mget_analysis,
     set_analysis_many,
 )
-from app.services.trending_service import get_youtube_trends
-from app.services.trending_service.get_youtube_trends import get_trending_videos_async
+from app.services.hostpot_service.get_youtube_trends import get_trending_videos_async
 
 logger = logging.getLogger(__name__)
 

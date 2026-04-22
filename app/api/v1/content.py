@@ -10,7 +10,7 @@ from app.schemas.content import (
     GenerateTextResponse,
 
 )
-from app.services.content_service import (
+from app.services.generation_service import (
     get_brand_for_store,
     create_text_generation,
     create_deprecated_text_record,
@@ -41,32 +41,32 @@ def _resolve_brand(request_brand, current_merchant: Merchant, db: Session):
 # --------------------------
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
-
-@router.post("/upload-reference-image", response_model=dict)
-async def upload_reference_image(
-    image: UploadFile = File(..., description="参考图文件，JPG/PNG/WebP，最大 10MB"),
-    current_merchant: Merchant = Depends(get_current_merchant),
-):
-    """
-    上传参考图到 SeedDance，返回 hosted URL。
-    用于 image_to_video 模式：先调用此接口获取 image_url，再在 generate-video 请求中传入。
-    """
-    if not image.content_type or image.content_type.lower() not in ALLOWED_IMAGE_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail="仅支持图片格式：JPG、PNG、WebP",
-        )
-    try:
-        seedance_client._headers()
-    except ValueError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    try:
-        content = await image.read()
-        filename = image.filename or "image.png"
-        url = await seedance_client.upload_reference_image(content, filename)
-        return success({"image_url": url})
-    except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+#
+# @router.post("/upload-reference-image", response_model=dict)
+# async def upload_reference_image(
+#     image: UploadFile = File(..., description="参考图文件，JPG/PNG/WebP，最大 10MB"),
+#     current_merchant: Merchant = Depends(get_current_merchant),
+# ):
+#     """
+#     上传参考图到 SeedDance，返回 hosted URL。
+#     用于 image_to_video 模式：先调用此接口获取 image_url，再在 generate-video 请求中传入。
+#     """
+#     if not image.content_type or image.content_type.lower() not in ALLOWED_IMAGE_TYPES:
+#         raise HTTPException(
+#             status_code=400,
+#             detail="仅支持图片格式：JPG、PNG、WebP",
+#         )
+#     try:
+#         seedance_client._headers()
+#     except ValueError as e:
+#         raise HTTPException(status_code=503, detail=str(e))
+#     try:
+#         content = await image.read()
+#         filename = image.filename or "image.png"
+#         url = await seedance_client.upload_reference_image(content, filename)
+#         return success({"image_url": url})
+#     except RuntimeError as e:
+#         raise HTTPException(status_code=502, detail=str(e))
 
 # --------------------------
 # 文字生成（qwen3.5-plus）

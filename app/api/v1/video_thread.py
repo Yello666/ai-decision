@@ -10,15 +10,19 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_merchant
 from app.core.responses import success
+from app.db.mysql import get_db
 from app.models import Merchant
+from app.schemas.content import VideoTaskCallbackRequest
 from app.schemas.video_thread import (
     CreateThreadRequest,
     ResumeThreadRequest,
     UpdateThreadParamsRequest,
 )
+from app.services.generate_service import process_video_task_callback
 from app.services.video_thread_service import (
     create_thread_task,
     get_thread_view_state,
@@ -51,7 +55,7 @@ async def create_thread(
 
 # ──────────────────────────────────────────────
 # POST /video-thread/{thread_id}/resume
-#   同样异步非阻塞，立即返回
+# 用户决策接口，用于注入用户决策（approve / edit / feedback），恢复 Graph 执行。
 # ──────────────────────────────────────────────
 @router.post("/{thread_id}/resume", response_model=dict)
 async def resume_thread(
@@ -65,28 +69,6 @@ async def resume_thread(
     """
     data = await resume_thread_task(thread_id, payload, current_merchant)
     return success(data=data)
-
-
-# # ──────────────────────────────────────────────
-# # PATCH /video-thread/{thread_id}/params
-# #   仅修改视频全局参数，不推进 Graph。
-# #   典型用法：waiting_human 阶段用户在审阅分镜时，先调节分辨率/比例/语言等，
-# #            然后再调 /resume 提交 approve / edit / feedback。
-# # ──────────────────────────────────────────────
-# @router.patch("/{thread_id}/params", response_model=dict)
-# async def patch_thread_params(
-#     thread_id: str,
-#     payload: UpdateThreadParamsRequest,
-#     current_merchant: Merchant = Depends(get_current_merchant),
-# ):
-#     """
-#     修改视频生成会话的全局参数（config_params / media_assets / generation_mode）。
-#     仅在 parse_intent_done / plan_script_done / waiting_human 阶段可用；
-#     任务一旦进入 assemble_and_submit 及后续阶段即拒绝修改。
-#     """
-#     data = await update_thread_params(thread_id, payload, current_merchant)
-#     return success(data=data)
-
 
 # ──────────────────────────────────────────────
 # GET /video-thread/{thread_id}/state
@@ -116,3 +98,27 @@ async def stream_thread_events(
     current_merchant: Merchant = Depends(get_current_merchant),
 ):
     return await stream_thread_events_response(thread_id, request, current_merchant)
+
+# ----------------------------------------------------------
+# 方舟平台回调 — 接收视频生成任务状态推送（无需鉴权）
+# 幂等设计：终态记录不重复处理；5s 内必须响应 200
+# POST /video-thread/callback
+# ----------------------------------------------------------
+@router.post("/callback", response_model=dict)
+async def video_task_callback(
+    payload: VideoTaskCallbackRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    接收方舟平台 POST 推送的视频任务状态回调。
+
+    状态枚举: queued / running / succeeded / failed / expired。
+    当 status=succeeded 时，将完整 generation 数据持久化到数据库。
+    若该任务属于串行链条（Redis seq_chain:{task_id}），自动提交下一段。
+    方舟平台在 5s 内未收到成功响应时会重试最多 3 次，本接口保证幂等。
+    """
+    result = await process_video_task_callback(payload, db)
+    return success(data=result)
+
+
+

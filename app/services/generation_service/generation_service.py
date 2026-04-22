@@ -14,7 +14,7 @@ from app.models import Generation
 from app.schemas.content import ProductObject
 from app.schemas.hotspot import TrendObject, BrandObject
 from app.services.merchant_service import get_brand_by_merchant_id
-from app.services.content_service.prompt_templates import (
+from app.services.generation_service.prompt_templates import (
     build_video_prompt,
     build_image_prompt,
     build_text_prompt,

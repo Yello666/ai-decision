@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Mapping, Optional
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordBearer
@@ -15,11 +15,22 @@ from app.services.merchant_service import get_merchant_by_store_id
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
 
-def _extract_access_token(request: Request, bearer_token: Optional[str]) -> Optional[str]:
-    """按优先级提取 access token：Cookie → Authorization Bearer（兼容过渡期）。"""
+def extract_access_token_from_cookies(
+    cookies: Mapping[str, str],
+    fallback_token: Optional[str] = None,
+) -> Optional[str]:
+    """按优先级提取 access token：Cookie → fallback（Bearer / query，兼容过渡期）。
+
+    REST 和 WebSocket 共用：REST 传入 ``request.cookies``，WS 传入 ``websocket.cookies``。
+    """
     settings = get_settings()
-    cookie_token = request.cookies.get(settings.ACCESS_COOKIE_NAME)
-    return cookie_token or bearer_token
+    cookie_token = cookies.get(settings.ACCESS_COOKIE_NAME)
+    return cookie_token or fallback_token
+
+
+def _extract_access_token(request: Request, bearer_token: Optional[str]) -> Optional[str]:
+    """委托给 :func:`extract_access_token_from_cookies`。"""
+    return extract_access_token_from_cookies(request.cookies, bearer_token)
 
 
 def get_current_merchant(
