@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 
 MAX_SEGMENT_DURATION = 12
 MIN_SEGMENT_DURATION = 4
+LLM_REQUEST_TIMEOUT_SECONDS = 180
+LLM_MAX_RETRIES = 2
+PLANNER_MAX_TOKENS = 4000
+REVISER_MAX_TOKENS = 4000
+TRANSLATE_MAX_TOKENS = 1000
 
 
 def _get_llm_client() -> AsyncOpenAI:
@@ -30,10 +35,19 @@ def _get_llm_client() -> AsyncOpenAI:
     return AsyncOpenAI(
         api_key=settings.LLM_API_KEY,
         base_url=settings.LLM_API_URL,
-        timeout=90,
-        max_retries=2,
+        timeout=LLM_REQUEST_TIMEOUT_SECONDS,
+        max_retries=LLM_MAX_RETRIES,
         http_client=httpx.AsyncClient(proxy=None),
     )
+
+
+def _chat_extra_kwargs(*, max_tokens: int) -> dict[str, Any]:
+    """统一 LLM 请求参数，减少长思考导致的超时与高 token 消耗。"""
+    return {
+        "max_tokens": max_tokens,
+        "timeout": LLM_REQUEST_TIMEOUT_SECONDS,
+        "extra_body": {"enable_thinking": False},
+    }
 
 
 def _extract_json(text: str) -> dict:
@@ -151,6 +165,7 @@ async def call_script_planner(
         ],
         temperature=0.7,
         response_format={"type": "json_object"},
+        **_chat_extra_kwargs(max_tokens=PLANNER_MAX_TOKENS),
     )
 
     content = resp.choices[0].message.content if resp.choices else ""
@@ -246,6 +261,7 @@ async def call_script_reviser(
         ],
         temperature=0.6,
         response_format={"type": "json_object"},
+        **_chat_extra_kwargs(max_tokens=REVISER_MAX_TOKENS),
     )
 
     content = resp.choices[0].message.content if resp.choices else ""
@@ -270,6 +286,7 @@ async def translate_to_english(text: str) -> str:
             {"role": "user", "content": src},
         ],
         temperature=0,
+        **_chat_extra_kwargs(max_tokens=TRANSLATE_MAX_TOKENS),
     )
     content = resp.choices[0].message.content if resp.choices else ""
     translated = (content or "").strip()
