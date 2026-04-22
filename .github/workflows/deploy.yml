@@ -55,7 +55,7 @@ jobs:
             
             # 【强制刷新】删除本地可能存在的同名旧镜像，确保 pull 动作真正发生
             docker rmi ${{ env.ACR_REPO }}:${{ github.sha }} || true
-            
+            docker system prune -a -f
             # 使用 Commit SHA 确保版本严格一致
             docker pull ${{ env.ACR_REPO }}:${{ github.sha }}
             
