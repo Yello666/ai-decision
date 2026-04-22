@@ -12,18 +12,10 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code  # 强制清除缓存，拉取最新代码
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
-          clean: true          # 清空本地修改
-          fetch-depth: 0       # 拉取完整历史
-          persist-credentials: false
-
-      - name: 强制同步远程代码（解决回退不生效）
-        run: |
-          git fetch origin
-          git reset --hard origin/master
-          git clean -fd
+          fetch-depth: 0 # 确保能获取到回退后的所有提交历史
 
       - name: Login to ACR
         uses: aliyun/acr-login@v1
@@ -34,12 +26,16 @@ jobs:
 
       - name: Build and Push Docker Image
         run: |
-          # 重点：加了 --no-cache 强制重新构建，不使用旧缓存
+          # 1. 强制不使用缓存构建
+          # 2. 这里的 github.sha 对应你当前 commit 的哈希值（回退后的那个）
           docker build --no-cache -t ${{ env.ACR_REPO }}:${{ github.sha }} .
-          docker tag ${{ env.ACR_REPO }}:${{ github.sha }} ${{ env.ACR_REPO }}:latest
           
+          # 推送具体的 SHA 标签（这是唯一的身份证明）
           docker push ${{ env.ACR_REPO }}:${{ github.sha }}
-          docker push ${{ env.ACR_REPO }}:latest
+          
+          # 也可以更新 latest，但部署时不建议只依赖它
+          docker tag ${{ env.ACR_REPO }}:${{ github.sha }} ${{ env.ACR_REPO }:latest
+          docker push ${{ env.ACR_REPO }:latest
 
   deploy-to-ecs:
     needs: build-and-push
@@ -54,15 +50,23 @@ jobs:
           script: |
             docker login --username=${{ secrets.ACR_USERNAME }} --password=${{ secrets.ACR_PASSWORD }} ${{ env.ACR_REGISTRY }}
             
+            # 停止并删除旧容器
             docker stop shop-ai || true
             docker rm shop-ai || true
             
-            # 关键：用 commit 版本号拉取，绝对不会用缓存！
+            # 【关键改动】删除 ECS 本地可能存在的该 SHA 标签镜像，强制重新拉取
+            docker rmi ${{ env.ACR_REPO }}:${{ github.sha }} || true
+            
+            # 拉取刚刚构建好的、对应回退后版本的镜像
             docker pull ${{ env.ACR_REPO }}:${{ github.sha }}
             
+            # 启动容器
             docker run -d \
               --name shop-ai \
               -p 8000:8000 \
               -v $(pwd)/.env:/app/.env \
               --restart always \
               ${{ env.ACR_REPO }}:${{ github.sha }}
+            
+            # 清理无用镜像（虚悬镜像），释放空间
+            docker image prune -f
