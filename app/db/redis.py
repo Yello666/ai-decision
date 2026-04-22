@@ -1,5 +1,9 @@
 # 导入变成 redis.asyncio
+import logging
+
 import redis.asyncio as redis
+from langgraph.middleware.redis.aio import logger
+
 from app.core.config import get_settings
 
 _client: redis.Redis | None = None
@@ -24,6 +28,12 @@ def get_redis_client() -> redis.Redis:
         decode_responses=True,
         max_connections=20,
     )
+    redis_url = (
+        f"redis://{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
+        if settings.REDIS_PASSWORD
+        else f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
+    )
+    print(f"Redis 连接 URL: {redis_url}")
     _client = redis.Redis(connection_pool=pool)
     return _client
 
