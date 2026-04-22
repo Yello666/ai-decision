@@ -1,8 +1,6 @@
 # 导入变成 redis.asyncio
-import logging
 
 import redis.asyncio as redis
-from langgraph.middleware.redis.aio import logger
 
 from app.core.config import get_settings
 
