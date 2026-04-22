@@ -267,7 +267,7 @@ async def set_waiting_human(state: VideoGenerationState) -> dict[str, Any]:
         "human_action": None,
     }
 
-def human_interrupt(state: VideoGenerationState) -> dict:
+async def human_interrupt(state: VideoGenerationState) -> dict:
     """
     真正的 human-in-the-loop 中断点。
     LangGraph 在此暂停执行，将控制权交给前端。
@@ -286,16 +286,25 @@ def human_interrupt(state: VideoGenerationState) -> dict:
             "mode": seg.get("mode"),
         })
 
-    # 调用interrupt函数，langgraph状态机终止执行。interrupt里面是返回给前端的字段。
-    # 前端传回的值会存到human_input里。
-    human_input = interrupt({
+    interrupt_payload = {
         "event": "require_human_input",
         "segments": display_segments,
         "total_duration": state.get("total_duration", 0),
         "execution_strategy": state.get("execution_strategy", "parallel"),
         "revision_count": state.get("revision_count", 0),
         "message": "请审阅剧本，选择: approve(确认生成) / edit(修改后生成) / feedback(提出意见重新生成)",
-    })
+    }
+
+    # 通过 SSE 主动推送一次，前端无需等待 resume 轮询就能拿到待审阅剧本
+    await publish_event(
+        state.get("thread_id", ""),
+        "human_action_required",
+        interrupt_payload,
+    )
+
+    # 调用interrupt函数，langgraph状态机终止执行。interrupt里面是返回给前端的字段。
+    # 前端传回的值会存到human_input里。
+    human_input = interrupt(interrupt_payload)
 
     # return的值会传递给路由函数
     return {
