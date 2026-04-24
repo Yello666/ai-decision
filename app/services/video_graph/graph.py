@@ -12,10 +12,10 @@ from __future__ import annotations
 import logging
 from functools import lru_cache
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
 
+from app.db.postgres import get_checkpointer
 from app.services.video_graph.state import VideoGenerationState
 from app.services.video_graph.nodes import (
     apply_edit,
@@ -112,7 +112,11 @@ def build_video_graph() -> StateGraph:
 
 @lru_cache(maxsize=1)
 def get_graph():
-    """获取编译后的 Graph 单例（带 MemorySaver checkpointer）。"""
+    """获取编译后的 Graph 单例（带 Postgres checkpointer）。
+
+    注意：首次调用必须发生在 FastAPI lifespan 完成 Postgres 初始化之后，
+    否则 ``get_checkpointer()`` 会抛错。
+    """
     graph = build_video_graph()
-    checkpointer = MemorySaver()
+    checkpointer = get_checkpointer()
     return graph.compile(checkpointer=checkpointer)

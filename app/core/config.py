@@ -32,10 +32,30 @@ class Settings(BaseSettings):
     MYSQL_MAX_OVERFLOW: int = 20
 
     # Redis
-    REDIS_HOST: str = "localhost"
-    REDIS_PASSWORD: str = ""
+    REDIS_HOST: str
+    REDIS_PASSWORD: str
     REDIS_DB: int = 0
     REDIS_PORT: int = 6379
+
+    # Postgres（LangGraph checkpointer 专用）
+    POSTGRES_HOST: str
+    POSTGRES_PASSWORD: str
+    POSTGRES_PORT: int = 5432
+    POSTGRES_USER: str
+    POSTGRES_DB: str = "lg_checkpoints"
+    # 连接池
+    POSTGRES_POOL_MIN: int = 1
+    POSTGRES_POOL_MAX: int = 10
+
+    # -------- LangGraph checkpoint 清理策略 --------
+    # 工作流到达终态（approve/cancel/respond→END）会主动删除；
+    # 下列参数用于被动清理（兜底废弃/崩溃会话）。
+    CHECKPOINT_SWEEP_ENABLED: bool = True
+    # 最近活跃时间早于此值的 thread 会被清理
+    CHECKPOINT_TTL_DAYS: int = 14
+    # 后台扫描周期（小时）
+    CHECKPOINT_SWEEP_INTERVAL_HOURS: int = 24
+
 
     # -------- 本地开发配置（仅 LOCAL_DEV=True 时生效） --------
     _LOCAL_MYSQL_HOST: str = "localhost"

@@ -18,6 +18,11 @@ from app.core.hot_trends_cache import preload_hot_trends_cache
 from app.core.responses import success
 import logging
 from app.db.mysql import engine, db_url
+from app.db.postgres import (
+    close_postgres_checkpointer,
+    init_postgres_checkpointer,
+    start_checkpoint_cleanup_task,
+)
 from app.db.redis import get_redis_client, close_redis
 from app.models import Base
 from app.services.hostpot_service.collect_hostspot import collect_and_format_hot_data_async
@@ -41,6 +46,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Redis ping failed (might be mock): {e}")
 
+    # LangGraph checkpointer：初始化 Postgres 连接池并确保表结构存在
+    try:
+        await init_postgres_checkpointer()
+    except Exception:
+        logger.exception("Postgres checkpointer 初始化失败")
+        raise
+
+    # 启动后台清理任务：兜底清理长期废弃/崩溃的 thread
+    start_checkpoint_cleanup_task()
+
     if settings.PRELOADING_HOT_TRENDS:
         try:
             await preload_hot_trends_cache(loader=collect_and_format_hot_data_async)
@@ -55,6 +70,7 @@ async def lifespan(app: FastAPI):
 
     yield  # 应用运行
 
+    await close_postgres_checkpointer()
     if scheduler is not None:
         scheduler.shutdown(wait=False)
         logger.info("热点推荐邮件定时器已关闭")

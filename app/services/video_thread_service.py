@@ -4,31 +4,39 @@ import asyncio
 import json
 import logging
 import uuid
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Optional
 
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
-from app.models import Merchant
+from app.db.mysql import SessionLocal
+from app.models import Generation, Merchant, VideoThread
 from app.schemas.video_thread import (
     ConfigParamsInput,
     CreateThreadRequest,
     MediaAssetsInput,
     ResumeThreadRequest,
+    ThreadHistoryResponse,
+    ThreadHistoryTurn,
     UpdateThreadParamsRequest,
+    VideoThreadListItem,
+    VideoThreadListResponse,
 )
 from app.services.video_graph.event_bus import BusEvent, get_event_bus, publish_event
 from app.services.video_graph.graph import get_graph
 from app.services.video_graph.state import DEFAULT_CONFIG
-from app.services.video_graph.view_state import FrontendViewState, map_graph_state_to_view
+from app.services.video_graph.view_state import (
+    FrontendViewState,
+    format_segments_for_view,
+    map_graph_state_to_view,
+)
 
 logger = logging.getLogger(__name__)
 
 _RUNNING_TASKS: dict[str, asyncio.Task] = {}
-
-_THREAD_OWNERS: dict[str, str] = {} #标记每一个thread_id所属的store_id
 
 # 允许修改全局视频参数的阶段。
 # 设计原则：parse_intent 尚未完成前不能改（parsed_* 还未生成）；
@@ -40,6 +48,9 @@ _PARAM_EDITABLE_STEPS = frozenset(
         "waiting_human",
     }
 )
+
+# 列表页标题截断长度（与 VideoThread.title 列长度对齐）
+_TITLE_MAX_LEN = 100
 
 
 def _register_task(thread_id: str, task: asyncio.Task) -> None:
@@ -56,40 +67,256 @@ def _is_running(thread_id: str) -> bool:
     return task is not None and not task.done()
 
 
-def _register_thread_owner(thread_id: str, store_id: str) -> None:
-    _THREAD_OWNERS[thread_id] = store_id
+# ─────────────────────────────────────────────────────────────
+# video_threads 索引表：增删改查助手
+# ─────────────────────────────────────────────────────────────
+# 以下方法均为同步（SQLAlchemy sync Session），在 async 调用点用 asyncio.to_thread 调度。
 
 
-def _owner_of(thread_id: str) -> Optional[str]:
-    return _THREAD_OWNERS.get(thread_id)
+def _derive_status(state: dict, *, workflow_ended: bool) -> str:
+    """根据 graph state + 是否到达 END 推导索引表的 status。"""
+    error_msg = state.get("error")
+    current_step = state.get("current_step") or ""
+    if error_msg or current_step == "error":
+        return "error"
+    if workflow_ended:
+        return "finished"
+    if current_step == "waiting_human":
+        return "waiting_human"
+    return "running"
+
+
+def _pick_thumbnail(
+    product: Optional[dict],
+    media_assets: Optional[dict],
+) -> Optional[str]:
+    """创建 thread 时确定列表页缩略图。
+
+    优先级：
+      1. 商品主图 ``product.image_url``（最贴合"这个 thread 在讲什么")；
+      2. 媒体素材首帧 ``media_assets.first_frame_url``；
+      3. 首张参考图 ``media_assets.ref_image_urls[0]``。
+    都没有则返回 None（前端自行兜底占位图）。
+    """
+    if product:
+        img = (product.get("image_url") or "").strip()
+        if img:
+            return img
+    if media_assets:
+        first = (media_assets.get("first_frame_url") or "").strip()
+        if first:
+            return first
+        refs = media_assets.get("ref_image_urls") or []
+        if refs:
+            first_ref = str(refs[0]).strip()
+            if first_ref:
+                return first_ref
+    return None
+
+
+def _db_insert_thread(
+    thread_id: str,
+    store_id: str,
+    user_input: str,
+    thumbnail_url: Optional[str],
+) -> None:
+    """thread 创建时 INSERT 索引行；幂等：已存在则跳过（防止重复提交）。"""
+    db = SessionLocal()
+    try:
+        exists = db.query(VideoThread).filter(VideoThread.thread_id == thread_id).first()
+        if exists is not None:
+            return
+        title = (user_input or "").strip()[:_TITLE_MAX_LEN] or None
+        row = VideoThread(
+            thread_id=thread_id,
+            shopify_store_id=store_id,
+            status="running",
+            current_step="initializing",
+            title=title,
+            user_input=user_input or None,
+            thumbnail_url=thumbnail_url,
+            revision_count=0,
+        )
+        db.add(row)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to insert video_thread row: %s", thread_id)
+    finally:
+        db.close()
+
+
+def _db_update_thread_snapshot(
+    thread_id: str,
+    *,
+    status: str,
+    current_step: Optional[str],
+    revision_count: Optional[int],
+    error_message: Optional[str],
+    completed: bool,
+) -> None:
+    """工作流状态变化时 UPDATE 索引行；仅更新已存在行。"""
+    db = SessionLocal()
+    try:
+        row = db.query(VideoThread).filter(VideoThread.thread_id == thread_id).first()
+        if row is None:
+            logger.warning("video_thread row missing on update: %s", thread_id)
+            return
+        row.status = status
+        if current_step:
+            row.current_step = current_step
+        if revision_count is not None:
+            row.revision_count = revision_count
+        if error_message:
+            row.error_message = error_message
+        if completed:
+            row.completed_at = datetime.now(timezone.utc)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to update video_thread row: %s", thread_id)
+    finally:
+        db.close()
+
+
+def _db_get_thread_owner(thread_id: str) -> Optional[VideoThread]:
+    """返回 thread 的 VideoThread 行（用于归属校验与列表页兜底展示）。"""
+    db = SessionLocal()
+    try:
+        return (
+            db.query(VideoThread).filter(VideoThread.thread_id == thread_id).first()
+        )
+    finally:
+        db.close()
+
+
+def _db_list_threads(
+    store_id: str,
+    status: Optional[str],
+    limit: int,
+    offset: int,
+) -> tuple[int, list[VideoThread]]:
+    db = SessionLocal()
+    try:
+        q = db.query(VideoThread).filter(VideoThread.shopify_store_id == store_id)
+        if status:
+            q = q.filter(VideoThread.status == status)
+        total = q.count()
+        rows = (
+            q.order_by(VideoThread.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .all()
+        )
+        return total, rows
+    finally:
+        db.close()
+
+
+def _db_list_generation_urls(thread_ids: list[str]) -> dict[str, list[str]]:
+    """按 thread_id 批量取该 thread 下所有 succeeded 的视频 URL。
+
+    - 仅选取 type=video & status=succeeded & result_url IS NOT NULL；
+    - 结果按 generations.created_at 升序，保持与 segment 提交顺序一致；
+    - 未命中的 thread_id 不会出现在返回字典里。
+    """
+    if not thread_ids:
+        return {}
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(Generation.thread_id, Generation.result_url)
+            .filter(
+                Generation.thread_id.in_(thread_ids),
+                Generation.type == "video",
+                Generation.status == "succeeded",
+                Generation.result_url.isnot(None),
+            )
+            .order_by(Generation.created_at.asc())
+            .all()
+        )
+        result: dict[str, list[str]] = {}
+        for tid, url in rows:
+            if not tid or not url:
+                continue
+            result.setdefault(tid, []).append(url)
+        return result
+    finally:
+        db.close()
+
+
+def _db_get_generation_urls(thread_id: str) -> list[str]:
+    """单个 thread 的 succeeded 视频 URL 列表（详情页用）。"""
+    return _db_list_generation_urls([thread_id]).get(thread_id, [])
+
+
+async def _persist_thread_snapshot(thread_id: str, *, workflow_ended: bool) -> None:
+    """读当前 graph state，把 status / current_step / revision_count 同步到索引表。"""
+    graph = get_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    try:
+        snapshot = await graph.aget_state(config)
+        state: dict[str, Any] = snapshot.values if snapshot else {}
+    except Exception:
+        logger.warning("aget_state failed during persist: %s", thread_id, exc_info=True)
+        state = {}
+
+    status = _derive_status(state, workflow_ended=workflow_ended)
+    await asyncio.to_thread(
+        _db_update_thread_snapshot,
+        thread_id,
+        status=status,
+        current_step=state.get("current_step"),
+        revision_count=state.get("revision_count"),
+        error_message=state.get("error"),
+        completed=status in ("finished", "error"),
+    )
 
 
 async def _load_state_with_auth(thread_id: str, merchant: Merchant) -> dict:
+    """读取 graph state 并做归属校验。
+
+    归属兜底顺序：
+    1) graph state 中的 ``shopify_store_id``；
+    2) MySQL ``video_threads`` 索引行；
+    3) 以上都没有 → 404。
+    """
     graph = get_graph()
     config = {"configurable": {"thread_id": thread_id}}
 
     try:
         snapshot = await graph.aget_state(config)
     except Exception:
-        logger.warning("aget_state failed, fallback owner map: %s", thread_id, exc_info=True)
+        logger.warning("aget_state failed, fallback to DB: %s", thread_id, exc_info=True)
         snapshot = None
 
     if snapshot and snapshot.values:
         store_id = snapshot.values.get("shopify_store_id", "")
-        if store_id != merchant.shopify_store_id:
+        if store_id and store_id != merchant.shopify_store_id:
             raise HTTPException(status_code=403, detail="forbidden")
-        return snapshot.values
+        if store_id:
+            return snapshot.values
+        # state 里没有 store_id（刚创建未落态），走 DB 兜底
 
-    owner_store_id = _owner_of(thread_id)
-    if owner_store_id is None:
+    row = await asyncio.to_thread(_db_get_thread_owner, thread_id)
+    if row is None:
         raise HTTPException(status_code=404, detail="thread_not_found")
-    if owner_store_id != merchant.shopify_store_id:
+    if row.shopify_store_id != merchant.shopify_store_id:
         raise HTTPException(status_code=403, detail="forbidden")
 
+    if snapshot and snapshot.values:
+        # state 存在但无 store_id：用 DB 兜底的值回填
+        values = dict(snapshot.values)
+        values["shopify_store_id"] = row.shopify_store_id
+        return values
+
+    # state 彻底缺失（极早期或已被清理）：构造最小回退状态
     return {
         "thread_id": thread_id,
-        "shopify_store_id": owner_store_id,
-        "current_step": "initializing",
+        "shopify_store_id": row.shopify_store_id,
+        "current_step": row.current_step or "initializing",
+        "user_input": row.user_input or "",
+        "revision_count": row.revision_count or 0,
     }
 
 
@@ -219,10 +446,17 @@ async def _run_graph_in_background(
             await graph.ainvoke(initial_state or {}, config=config)
     except GraphInterrupt:
         logger.info("Graph paused at interrupt: %s", thread_id)
+        # interrupt 处于中间态（waiting_human），同步一下状态供列表页展示
+        await _persist_thread_snapshot(thread_id, workflow_ended=False)
         return
     except Exception as exc:
         logger.exception("Graph run failed: %s", thread_id)
         await publish_event(thread_id, "error", {"message": f"工作流执行失败: {exc}"})
+        await _persist_thread_snapshot(thread_id, workflow_ended=False)
+        return
+
+    # 正常到达 END（respond → END）：标记 finished，保留 checkpoint 作为历史对话记录
+    await _persist_thread_snapshot(thread_id, workflow_ended=True)
 
 
 async def create_thread_task(payload: CreateThreadRequest, merchant: Merchant) -> dict:
@@ -242,7 +476,22 @@ async def create_thread_task(payload: CreateThreadRequest, merchant: Merchant) -
         "current_step": "initializing",
     }
 
-    _register_thread_owner(thread_id, merchant.shopify_store_id)
+    # 创建时确定列表页缩略图：商品主图 > 首帧 > 首张参考图
+    thumbnail = _pick_thumbnail(
+        product=payload.product.model_dump(mode="json"),
+        media_assets=(
+            payload.media_assets.model_dump(mode="json") if payload.media_assets else None
+        ),
+    )
+
+    # 立即写 video_threads 索引行，作为列表查询的权威数据源与归属校验依据
+    await asyncio.to_thread(
+        _db_insert_thread,
+        thread_id,
+        merchant.shopify_store_id,
+        payload.user_input or "",
+        thumbnail,
+    )
 
     graph = get_graph()
     config = {"configurable": {"thread_id": thread_id}}
@@ -312,6 +561,16 @@ async def resume_thread_task(
         "human_edited_segments": [s.model_dump(exclude_none=True) for s in payload.edited_segments],
         "human_feedback": payload.feedback,
     }
+    # 标记状态回到 running，列表页能即时反映"用户已确认/反馈，正在推进"
+    await asyncio.to_thread(
+        _db_update_thread_snapshot,
+        thread_id,
+        status="running",
+        current_step="human_responded",
+        revision_count=None,
+        error_message=None,
+        completed=False,
+    )
     # 再次新建task执行graph，因为之前的task已经停止并回收了，需要重新开始执行
     task = asyncio.create_task(
         _run_graph_in_background(thread_id, resume_command=Command(resume=human_input)), 
@@ -427,4 +686,237 @@ async def stream_thread_events_response(
 def _sse_pack(event: str, data: dict) -> bytes:
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
+
+
+# ─────────────────────────────────────────────────────────────
+# 历史会话列表查询
+# ─────────────────────────────────────────────────────────────
+
+
+async def list_video_threads(
+    merchant: Merchant,
+    *,
+    status: Optional[str] = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> VideoThreadListResponse:
+    """按 store_id 分页列出该商户的 video thread 历史。
+
+    - 列表只返回轻量索引字段（不含 segments / 完整 state），按 created_at 倒序；
+    - 前端点进某条会话后，再调 ``GET /video-thread/{thread_id}/state`` 拿详情；
+    - ``status`` 支持按 running / waiting_human / finished / error 过滤。
+    """
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    total, rows = await asyncio.to_thread(
+        _db_list_threads,
+        merchant.shopify_store_id,
+        status,
+        limit,
+        offset,
+    )
+
+    # 批量查询当前页 thread 的最终视频 URL，避免 N+1
+    thread_ids = [r.thread_id for r in rows]
+    url_map = await asyncio.to_thread(_db_list_generation_urls, thread_ids)
+
+    items: list[VideoThreadListItem] = []
+    for r in rows:
+        item = VideoThreadListItem.model_validate(r)
+        item.final_video_urls = url_map.get(r.thread_id, [])
+        items.append(item)
+    return VideoThreadListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+# ─────────────────────────────────────────────────────────────
+# 历史会话详情（replay 对话过程）
+# ─────────────────────────────────────────────────────────────
+# 借助 LangGraph ``aget_state_history`` 把所有 checkpoint 快照拉回来，按时间正序
+# 解析出对前端有意义的"轮次"（user_input → assistant_draft → user_action → …）。
+# 设计要点：
+#   - checkpoint 数量可能很多（每个 node 写一次），通过 metadata.writes 来
+#     判定该次是由哪个 node 触发，避免靠"values 差异比对"的脆弱判定；
+#   - segments 返回给前端前统一用 ``format_segments_for_view`` 脱敏；
+#   - 即使某些 checkpoint 已被清理（TTL 到期），剩下的 turn 仍可渲染时间线。
+
+
+def _snapshot_created_at(snapshot: Any) -> Optional[datetime]:
+    """拿到 checkpoint 的创建时间：优先用 LangGraph 给的 ISO 字符串，再退回 UUIDv6。"""
+    created_raw = getattr(snapshot, "created_at", None)
+    if created_raw:
+        try:
+            if isinstance(created_raw, datetime):
+                return created_raw
+            return datetime.fromisoformat(str(created_raw).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            pass
+
+    cfg = getattr(snapshot, "config", None) or {}
+    cid = (cfg.get("configurable") or {}).get("checkpoint_id")
+    if cid:
+        from app.db.postgres import _uuid6_time  # 局部导入，避免循环依赖
+
+        return _uuid6_time(cid)
+    return None
+
+
+def _checkpoint_id_of(snapshot: Any) -> Optional[str]:
+    cfg = getattr(snapshot, "config", None) or {}
+    return (cfg.get("configurable") or {}).get("checkpoint_id")
+
+
+# metadata.writes 中，触发"一版新草稿"的节点
+_DRAFT_WRITER_NODES = frozenset({"plan_script", "apply_edit", "revise_script"})
+
+
+def _build_turn_from_snapshot(
+    snapshot: Any,
+    *,
+    state_emitted_user_input: bool,
+    submitted_emitted: bool,
+) -> tuple[Optional[ThreadHistoryTurn], bool, bool]:
+    """将单个 snapshot 映射为 0 个或 1 个历史 turn。
+
+    返回 ``(turn, new_state_emitted_user_input, new_submitted_emitted)``；
+    turn 为 None 表示这个 checkpoint 不需要对前端暴露（如 parse_intent / set_waiting_human）。
+    """
+    values: dict = getattr(snapshot, "values", None) or {}
+    metadata: dict = getattr(snapshot, "metadata", None) or {}
+    writes = metadata.get("writes") or {}
+    source = metadata.get("source")
+
+    created_at = _snapshot_created_at(snapshot)
+    checkpoint_id = _checkpoint_id_of(snapshot)
+    step = values.get("current_step")
+    revision_count = values.get("revision_count")
+
+    base_kwargs: dict[str, Any] = {
+        "checkpoint_id": checkpoint_id,
+        "created_at": created_at,
+        "step": step,
+        "revision_count": revision_count,
+    }
+
+    # 1) 第一条 user_input：由 create_thread_task 里 aupdate_state 写入，source="update"
+    if not state_emitted_user_input and source in ("input", "update"):
+        user_input = (values.get("user_input") or "").strip()
+        if user_input:
+            turn = ThreadHistoryTurn(
+                kind="user_input",
+                user_input=user_input,
+                **base_kwargs,
+            )
+            return turn, True, submitted_emitted
+
+    # 2) LLM 产出的某一版草稿：plan_script / apply_edit / revise_script
+    if isinstance(writes, dict) and any(n in writes for n in _DRAFT_WRITER_NODES):
+        raw_segments = values.get("script_segments") or []
+        if raw_segments:
+            config = values.get("parsed_config") or {}
+            language = config.get("language", "zh")
+            turn = ThreadHistoryTurn(
+                kind="assistant_draft",
+                segments=format_segments_for_view(raw_segments, language),
+                total_duration=values.get("total_duration"),
+                execution_strategy=values.get("execution_strategy"),
+                **base_kwargs,
+            )
+            return turn, state_emitted_user_input, submitted_emitted
+
+    # 3) 用户决策：human_interrupt 节点第二次写入时把 human_action 等写进 state
+    if isinstance(writes, dict) and "human_interrupt" in writes:
+        action = values.get("human_action")
+        if action in ("approve", "edit", "feedback"):
+            turn = ThreadHistoryTurn(
+                kind="user_action",
+                action=action,
+                human_feedback=values.get("human_feedback") or None,
+                human_edited_segments=values.get("human_edited_segments") or None,
+                **base_kwargs,
+            )
+            return turn, state_emitted_user_input, submitted_emitted
+
+    # 4) 任务提交：记一个里程碑 turn，方便前端画"已提交 Seedance"
+    if (
+        not submitted_emitted
+        and isinstance(writes, dict)
+        and "assemble_and_submit" in writes
+    ):
+        turn = ThreadHistoryTurn(kind="submitted", **base_kwargs)
+        return turn, state_emitted_user_input, True
+
+    return None, state_emitted_user_input, submitted_emitted
+
+
+async def get_thread_conversation_history(
+    thread_id: str,
+    merchant: Merchant,
+) -> ThreadHistoryResponse:
+    """回放一个 video thread 从创建到当前的完整对话过程。
+
+    - 先做归属校验（借用 ``_load_state_with_auth``）；
+    - 通过 LangGraph ``aget_state_history`` 拉取全部 checkpoint，按时间正序遍历；
+    - 每个 turn 只下发前端需要的字段，segments 已按语言脱敏。
+    """
+    current_state = await _load_state_with_auth(thread_id, merchant)
+
+    # 读一份 MySQL 索引行，用于补齐列表页的 title / thumbnail_url 等展示字段
+    row = await asyncio.to_thread(_db_get_thread_owner, thread_id)
+    final_urls = await asyncio.to_thread(_db_get_generation_urls, thread_id)
+
+    graph = get_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+
+    snapshots: list[Any] = []
+    try:
+        async for snap in graph.aget_state_history(config):
+            snapshots.append(snap)
+    except Exception:
+        logger.warning(
+            "aget_state_history failed: %s", thread_id, exc_info=True
+        )
+
+    # aget_state_history 返回倒序（最新在前），这里反转成正序便于按时间拼 timeline
+    snapshots.reverse()
+
+    turns: list[ThreadHistoryTurn] = []
+    state_emitted_user_input = False
+    submitted_emitted = False
+    for snap in snapshots:
+        turn, state_emitted_user_input, submitted_emitted = _build_turn_from_snapshot(
+            snap,
+            state_emitted_user_input=state_emitted_user_input,
+            submitted_emitted=submitted_emitted,
+        )
+        if turn is not None:
+            turns.append(turn)
+
+    # 兜底：如果 checkpoint 已被 TTL 清理、或刚创建还没落 state，而 MySQL 索引行还在，
+    # 至少把 user_input 作为第一条 turn 还原出来，保证前端不至于空白。
+    if not turns and row and (row.user_input or "").strip():
+        turns.append(
+            ThreadHistoryTurn(
+                kind="user_input",
+                user_input=row.user_input,
+                created_at=row.created_at,
+                step=row.current_step,
+                revision_count=row.revision_count,
+            )
+        )
+
+    status = _derive_status(
+        current_state,
+        workflow_ended=(current_state.get("current_step") in ("done", "submitted")),
+    )
+
+    return ThreadHistoryResponse(
+        thread_id=thread_id,
+        status=status,  # type: ignore[arg-type]
+        current_step=current_state.get("current_step"),
+        revision_count=current_state.get("revision_count"),
+        title=row.title if row else None,
+        thumbnail_url=row.thumbnail_url if row else None,
+        final_video_urls=final_urls,
+        turns=turns,
+    )
 

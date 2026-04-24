@@ -22,6 +22,7 @@ langchain
 langchain-community
 langchain-openai
 langgraph
+langgraph-checkpoint-postgres
 openai
 jiter==0.8.2
 dashscope
@@ -30,6 +31,7 @@ dashscope
 SQLAlchemy==2.0.38
 PyMySQL==1.1.1
 redis==5.2.1
+psycopg[binary,pool]>=3.2
 python-dotenv==1.0.1
 
 # 定时任务（热点推荐邮件等）；tzdata 供 zoneinfo 在非系统时区数据环境下使用
