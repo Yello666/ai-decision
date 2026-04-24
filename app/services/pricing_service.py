@@ -20,13 +20,13 @@ import httpx
 from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.errors import GraphInterrupt
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from pydantic import SecretStr
 
 from app.core.config import get_settings
+from app.db.postgres import delete_thread, get_checkpointer
 from app.models import Merchant
 from app.schemas.pricing import PricingAnalysisResponseLLM
 from app.services.product_service import (
@@ -528,8 +528,12 @@ def _route_after_review(state: PricingGraphState) -> str:
 
 
 def _build_pricing_graph():
-    """构建完整支持 interrupt + human review + conditional routing 的状态机。"""
-    checkpointer = MemorySaver()
+    """构建完整支持 interrupt + human review + conditional routing 的状态机。
+
+    checkpointer 来自 Postgres 连接池单例（由 FastAPI lifespan 初始化）。
+    首次调用必须发生在 ``init_postgres_checkpointer`` 之后。
+    """
+    checkpointer = get_checkpointer()
 
     workflow = StateGraph(PricingGraphState)
 
@@ -570,7 +574,19 @@ def _build_pricing_graph():
     return workflow.compile(checkpointer=checkpointer)
 
 
-_pricing_graph = _build_pricing_graph()
+_pricing_graph = None
+
+
+def _get_pricing_graph():
+    """惰性获取已编译的 pricing graph 单例。
+
+    必须在 FastAPI lifespan 初始化 Postgres checkpointer 之后才能调用；
+    正常由 HTTP 请求路径触发，此时已过 startup，不会有时序问题。
+    """
+    global _pricing_graph
+    if _pricing_graph is None:
+        _pricing_graph = _build_pricing_graph()
+    return _pricing_graph
 
 
 # ---------------------------------------------------------------------------
@@ -625,14 +641,17 @@ async def run_pricing_analysis(
         getattr(command, "resume", None) if command else None,
     )
 
+    pricing_graph = _get_pricing_graph()
     try:
         if command:
-            final = await _pricing_graph.ainvoke(command, config=config)
+            final = await pricing_graph.ainvoke(command, config=config)
         else:
-            final = await _pricing_graph.ainvoke(input_state, config=config)
+            final = await pricing_graph.ainvoke(input_state, config=config)
 
         logger.info("Pricing graph completed for merchant %s, thread=%s", merchant.name, thread_id)
         result = final.get("result", final)
+        # 工作流到达终态（apply/cancel → END）：主动清理 checkpoint，避免累积
+        await delete_thread(thread_id)
         return {"thread_id": thread_id, **result}
 
     except GraphInterrupt as exc:

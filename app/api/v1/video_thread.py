@@ -2,14 +2,18 @@
 视频生成会话 API —— 基于 LangGraph 状态机。
 
 核心接口：
+  GET    /video-thread/list                 分页列出当前商户的历史会话（轻量索引）
   POST   /video-thread/create               异步非阻塞，立即返回 thread_id
   POST   /video-thread/{thread_id}/resume   注入 human 决策，恢复 Graph
   GET    /video-thread/{thread_id}/state    单次拉取前端视图态（降级兜底）
+  GET    /video-thread/{thread_id}/history  回放对话过程（历次草稿 + 用户决策）
   GET    /video-thread/{thread_id}/stream   SSE 实时事件流（细粒度进度 / human_action / done / error）
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_merchant
@@ -21,17 +25,44 @@ from app.schemas.video_thread import (
     CreateThreadRequest,
     ResumeThreadRequest,
     UpdateThreadParamsRequest,
+    VideoThreadStatus,
 )
 from app.services.generate_service import process_video_task_callback
 from app.services.video_thread_service import (
     create_thread_task,
+    get_thread_conversation_history,
     get_thread_view_state,
+    list_video_threads,
     resume_thread_task,
     stream_thread_events_response,
     update_thread_params,
 )
 
 router = APIRouter(prefix="/video-thread", tags=["video-thread"])
+
+
+# ──────────────────────────────────────────────
+# GET /video-thread/list
+#   分页列出当前商户的历史会话（轻量索引，不含 segments 详情）
+# ──────────────────────────────────────────────
+@router.get("/list", response_model=dict)
+async def list_threads(
+    status: Optional[VideoThreadStatus] = Query(
+        default=None,
+        description="按状态过滤：running / waiting_human / finished / error；不传即全部",
+    ),
+    limit: int = Query(default=20, ge=1, le=100, description="每页数量，最大 100"),
+    offset: int = Query(default=0, ge=0, description="分页偏移"),
+    current_merchant: Merchant = Depends(get_current_merchant),
+):
+    """
+    列表页数据源。点击某条记录后，前端再调 `GET /video-thread/{thread_id}/state`
+    拉取完整对话（含 segments、revision_count、task_results 等）。
+    """
+    data = await list_video_threads(
+        current_merchant, status=status, limit=limit, offset=offset,
+    )
+    return success(data=data.model_dump(mode="json"))
 
 
 # ──────────────────────────────────────────────
@@ -86,6 +117,32 @@ async def get_thread_state(
     """
     data = await get_thread_view_state(thread_id, current_merchant)
     return success(data=data)
+
+
+# ──────────────────────────────────────────────
+# GET /video-thread/{thread_id}/history
+#   回放对话过程：历次 LLM 草稿 + 每一次用户决策（approve / edit / feedback）
+# ──────────────────────────────────────────────
+@router.get("/{thread_id}/history", response_model=dict)
+async def get_thread_history(
+    thread_id: str,
+    current_merchant: Merchant = Depends(get_current_merchant),
+):
+    """
+    返回一个 video thread 从创建到当前的完整对话时间线，供列表页点击后
+    在详情抽屉 / 时间线组件中渲染。
+
+    每条 turn 的 ``kind`` 之一：
+      - ``user_input``       用户最初输入的想法
+      - ``assistant_draft``  LLM 生成 / 编辑 / 重写产出的一版分镜草稿
+      - ``user_action``      用户的决策（approve / edit / feedback + 反馈 / 编辑明细）
+      - ``submitted``        已向 Seedance 提交，不再有新草稿
+
+    数据来源为 LangGraph Postgres checkpoint。超过 TTL 的老 thread 可能
+    丢失中间草稿，但会兜底返回一条 user_input。
+    """
+    data = await get_thread_conversation_history(thread_id, current_merchant)
+    return success(data=data.model_dump(mode="json"))
 
 
 # ──────────────────────────────────────────────
