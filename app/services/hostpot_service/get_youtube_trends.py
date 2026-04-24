@@ -2,8 +2,11 @@ from typing import List
 
 import httpx
 import requests
+import logging
 
 from app.schemas.hotspot import CollectTrendObject, SentimentCN
+
+logger = logging.getLogger(__name__)
 
 API_KEY = "AIzaSyByBXtfrN3NwEJ932l26nnP9Zxv8y5Ibjg"
 REGION_CODE = "US"
@@ -32,8 +35,9 @@ async def get_trending_videos_async(max_result: int) -> List[CollectTrendObject]
             response.raise_for_status()
         data = response.json()
     except httpx.HTTPError as e:
-        print(f"请求失败: {e}")
-        return []
+        # 回源失败应上抛，让调用方返回明确错误，避免把空结果写进缓存。
+        logger.exception("YouTube 热点拉取失败（异步）url=%s params=%s", url, params)
+        raise RuntimeError("YouTube 热点拉取失败") from e
     return _parse_youtube_response(data)
 
 # 旧版
@@ -53,9 +57,9 @@ def get_trending_videos(max_result: int) -> List[CollectTrendObject]:
         response = requests.get(url, params=params, timeout=15)
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
-        print(f"请求失败: {e}")
-        return []
-    print("状态码:", response.status_code)
+        logger.exception("YouTube 热点拉取失败（同步）url=%s params=%s", url, params)
+        raise RuntimeError("YouTube 热点拉取失败") from e
+    logger.info("YouTube 热点拉取成功（同步）status=%s", response.status_code)
     data = response.json()
     trend_objects = _parse_youtube_response(data)
     print(f"\n--- 当前 {REGION_CODE} 热门视频 ---\n")

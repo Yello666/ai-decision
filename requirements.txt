@@ -32,6 +32,10 @@ PyMySQL==1.1.1
 redis==5.2.1
 python-dotenv==1.0.1
 
+# 定时任务（热点推荐邮件等）；tzdata 供 zoneinfo 在非系统时区数据环境下使用
+APScheduler==3.10.4
+tzdata>=2024.1
+
 # 数据科学与算法
 numpy
 scikit-learn

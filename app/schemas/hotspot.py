@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import List, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 
@@ -118,6 +120,12 @@ class HotspotLLMModel(str, Enum):
     qwen_35_flash = "qwen3.5-flash"
 
 
+class RecommendEmailScheduleMode(str, Enum):
+    interval_from_now = "interval_from_now"
+    daily_fixed = "daily_fixed"
+    interval_from_fixed = "interval_from_fixed"
+
+
 class HotspotTrendRequest(BaseModel):
     """获取热点数据的请求参数结构体（分页）"""
     platforms: List[str] = Field(default=["youtube"], description="需要获取热点的平台列表")
@@ -153,6 +161,124 @@ class HotspotMatchResponse(BaseModel):
     reason: str = Field(..., description="简短分析理由")
     suggestion: str = Field(..., description="营销切入点建议（一句话）")
     risk_warning: Optional[str] = Field(default=None, description="风险提示（如存在公关风险）")
+
+
+class HotspotRecommendRequest(BaseModel):
+    """推荐热点：对全量缓存列表中全部热点做品牌匹配，再按契合度下限过滤。"""
+
+    min_compatibility_score: float = Field(
+        default=40.0,
+        ge=0.0,
+        le=100.0,
+        description="契合度低于该值的热点不返回",
+    )
+
+
+class HotspotRecommendedItem(BaseModel):
+    """单条推荐：完整热点展示信息 + 品牌匹配结果。"""
+
+    trend: CollectTrendObject = Field(..., description="热点展示字段")
+    match: HotspotMatchResponse = Field(..., description="与当前商户品牌的匹配结果")
+
+
+class HotspotRecommendResponse(BaseModel):
+    """推荐热点列表响应。"""
+
+    items: List[HotspotRecommendedItem] = Field(default_factory=list, description="通过分数阈值后的热点列表")
+    min_compatibility_score: float = Field(..., description="本次请求使用的最低契合度")
+    analyzed_count: int = Field(..., description="实际参与品牌匹配的热点条数（全量缓存中的条数）")
+
+
+class HotspotRecommendEmailScheduleUpsertRequest(BaseModel):
+    """开启/更新定时热点推荐邮件：最低契合度 + 整数小时间隔；启用时由服务端记录锚点时间并按间隔触发。"""
+
+    is_enabled: bool = Field(default=True, description="是否启用定时发送")
+    mode: RecommendEmailScheduleMode = Field(
+        default=RecommendEmailScheduleMode.interval_from_now,
+        description="定时模式：interval_from_now|daily_fixed|interval_from_fixed",
+    )
+    min_compatibility_score: float = Field(
+        ...,
+        ge=0.0,
+        le=100.0,
+        description="定时任务使用的最低契合度阈值，与 /hotspot/recommend 一致",
+    )
+    send_hour: int = Field(..., ge=0, le=23, description="每日发送的小时（0-23）")
+    send_minute: int = Field(..., ge=0, le=59, description="每日发送的分钟（0-59）")
+    timezone: str = Field(
+        default="Asia/Shanghai",
+        max_length=64,
+        description="IANA 时区名，如 Asia/Shanghai、UTC",
+    )
+    interval_hours: int = Field(
+        default=24,
+        ge=1,
+        le=8760,
+        description="两次发送之间的最短间隔（整数小时）；interval_from_now/interval_from_fixed 模式必填",
+    )
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: str) -> str:
+        try:
+            ZoneInfo(v)
+        except ZoneInfoNotFoundError as e:
+            raise ValueError(f"无效的时区: {v}") from e
+        return v
+
+    @field_validator("interval_hours")
+    @classmethod
+    def validate_interval_hours(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("interval_hours 必须 >= 1")
+        return v
+
+    @model_validator(mode="after")
+    def validate_by_mode(self):
+        if self.mode == RecommendEmailScheduleMode.daily_fixed:
+            return self
+        if self.mode in (
+            RecommendEmailScheduleMode.interval_from_now,
+            RecommendEmailScheduleMode.interval_from_fixed,
+        ) and self.interval_hours < 1:
+            raise ValueError("当前 mode 需要 interval_hours >= 1")
+        return self
+
+
+class HotspotRecommendEmailScheduleResponse(BaseModel):
+    """当前商户的热点推荐邮件定时配置。"""
+
+    id: int = Field(..., description="配置主键")
+    merchant_id: int = Field(..., description="商户 id")
+    is_enabled: bool = Field(..., description="是否启用")
+    mode: RecommendEmailScheduleMode = Field(..., description="定时模式")
+    min_compatibility_score: float = Field(..., description="最低契合度")
+    send_hour: int = Field(..., description="每日发送小时")
+    send_minute: int = Field(..., description="每日发送分钟")
+    timezone: str = Field(..., description="IANA 时区")
+    interval_hours: int = Field(..., description="最短发送间隔（小时）")
+    last_sent_at: Optional[datetime] = Field(default=None, description="上次成功发送时间（UTC）")
+    last_triggered_at: Optional[datetime] = Field(default=None, description="上次触发尝试时间（UTC）")
+
+
+class HotspotRecommendEmailScheduleStateResponse(BaseModel):
+    """
+    前端读取定时配置：未在库中保存过任何一行时 `configured=false`，
+    其它字段为表单可用的默认值（`min_compatibility_score` 会尽量采用 Redis 中推荐偏好）。
+    """
+
+    configured: bool = Field(..., description="是否已在数据库保存过定时配置")
+    id: Optional[int] = Field(default=None, description="配置主键；未保存过则为 null")
+    merchant_id: int = Field(..., description="商户 id")
+    is_enabled: bool = Field(..., description="是否启用定时发送")
+    mode: RecommendEmailScheduleMode = Field(..., description="定时模式")
+    min_compatibility_score: float = Field(..., description="最低契合度")
+    send_hour: int = Field(..., description="每日发送小时")
+    send_minute: int = Field(..., description="每日发送分钟")
+    timezone: str = Field(..., description="IANA 时区")
+    interval_hours: int = Field(..., description="最短发送间隔（小时）")
+    last_sent_at: Optional[datetime] = Field(default=None, description="上次成功发送时间（UTC）")
+    last_triggered_at: Optional[datetime] = Field(default=None, description="上次触发尝试时间（UTC）")
 
 
 class ShopInput(BaseModel):
