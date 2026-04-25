@@ -26,6 +26,7 @@ from app.db.postgres import (
 from app.db.redis import get_redis_client, close_redis
 from app.models import Base
 from app.services.hostpot_service.collect_hostspot import collect_and_format_hot_data_async
+from app.services.hostpot_service.recommend_email_scheduler import create_recommend_email_scheduler
 
 settings = get_settings()
 configure_logging()
@@ -62,9 +63,17 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("热点预加载失败")
 
+    scheduler = create_recommend_email_scheduler()
+    if scheduler is not None:
+        scheduler.start()
+        logger.info("热点推荐邮件定时器已启动")
+
     yield  # 应用运行
 
     await close_postgres_checkpointer()
+    if scheduler is not None:
+        scheduler.shutdown(wait=False)
+        logger.info("热点推荐邮件定时器已关闭")
     await close_redis()
 
 

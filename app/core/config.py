@@ -73,12 +73,12 @@ class Settings(BaseSettings):
 
 
     # -------- 本地开发配置（仅 LOCAL_DEV=True 时生效） --------
-    _LOCAL_MYSQL_HOST: str = "192.168.64.2"
+    _LOCAL_MYSQL_HOST: str = "localhost"
     _LOCAL_MYSQL_PASSWORD: str = "123456"
     _LOCAL_MYSQL_USER: str = "root"
     _LOCAL_MYSQL_PORT: int = 3306
-    _LOCAL_REDIS_HOST: str = "192.168.64.2"
-    _LOCAL_REDIS_PASSWORD: str = "123456"
+    _LOCAL_REDIS_HOST: str = "127.0.0.1"
+    _LOCAL_REDIS_PASSWORD: str = ""
     _LOCAL_SHOPIFY_REDIRECT_URL:str = "http://127.0.0.1:8000/api/v1/auth/shopify/callback"
 
     @model_validator(mode="after")
@@ -138,6 +138,15 @@ class Settings(BaseSettings):
     HOT_TRENDS_MATCH_VERSION: str = "v1"
 
     LOG_LEVEL: str = "INFO"
+
+    # -------- 邮件发送配置 --------
+    EMAIL_ENABLED: bool = True
+    EMAIL_SMTP_HOST: str = "smtp.qq.com"
+    EMAIL_SMTP_PORT: int = 465
+    EMAIL_USERNAME: Optional[str] = "2768843481@qq.com"
+    EMAIL_PASSWORD: Optional[str] = "fcgmkatobgojdeeh"  # 姐/哥记得换邮箱
+    EMAIL_FROM_NAME: str = "AI Decision"
+    EMAIL_USE_SSL: bool = True
 
     # -------- WebSocket 心跳/超时配置 --------
     # 服务端发送 {"event":"ping"} 的间隔（秒）
