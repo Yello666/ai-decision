@@ -25,10 +25,10 @@ from app.schemas.video_thread import (
     VideoThreadListItem,
     VideoThreadListResponse,
 )
-from app.services.video_graph.event_bus import BusEvent, get_event_bus, publish_event
-from app.services.video_graph.graph import get_graph
-from app.services.video_graph.state import DEFAULT_CONFIG
-from app.services.video_graph.view_state import (
+from app.services.video_thread_service.video_graph.event_bus import BusEvent, get_event_bus, publish_event
+from app.services.video_thread_service.video_graph.graph import get_graph
+from app.services.video_thread_service.video_graph.state import DEFAULT_CONFIG
+from app.services.video_thread_service.video_graph.view_state import (
     FrontendViewState,
     format_segments_for_view,
     map_graph_state_to_view,

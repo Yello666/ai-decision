@@ -58,7 +58,7 @@ class VideoGenerationState(TypedDict, total=False):
 
     职责：作为"后端运行态"，保留所有节点需要的上下文。
     不直接作为 API 响应返回给前端，
-    经 `app.services.video_graph.view_state.map_graph_state_to_view` 转换。
+    经 `app.services.video_thread_service.video_graph.view_state.map_graph_state_to_view` 转换。
     """
 
     # ---- 会话标识（用于 SSE 事件总线路由） ----

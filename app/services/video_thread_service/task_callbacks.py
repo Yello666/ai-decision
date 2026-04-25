@@ -6,8 +6,7 @@ import logging
 import time
 from typing import Optional
 
-from fastapi import HTTPException, WebSocket, WebSocketDisconnect
-from httpx import HTTPStatusError
+from fastapi import WebSocket, WebSocketDisconnect
 from jose import JWTError
 from sqlalchemy.orm import Session
 
@@ -15,10 +14,8 @@ from app.core.config import get_settings
 from app.core.security import decode_access_token
 from app.db.redis import get_redis_client
 from app.models import Generation
-from app.schemas.content import VideoTaskCallbackRequest, VideoTaskStatusResponse
-from app.services.generation_service import handle_video_task_callback
+from app.schemas.video_thread import VideoTaskCallbackRequest
 from app.services.notification_service import publish_generation_status
-from app.services.seedance2_service import query_video_task
 
 logger = logging.getLogger(__name__)
 
@@ -26,30 +23,6 @@ WS_CLOSE_NORMAL = 1000
 WS_CLOSE_CLIENT_ACTIVITY_TIMEOUT = 4002
 WS_CLOSE_INVALID_TOKEN = 4001
 WS_CLOSE_INVALID_CLIENT_JSON = 1008
-
-
-async def query_video_task_status(task_id: str) -> VideoTaskStatusResponse:
-    try:
-        result = await query_video_task(task_id)
-    except ValueError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except HTTPStatusError as e:
-        logger.error("Seedance query task upstream error: %s", e.response.text)
-        raise HTTPException(status_code=e.response.status_code, detail=f"上游 API 错误: {e.response.text}")
-    except Exception as e:
-        logger.exception("Seedance query task unexpected error")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    return VideoTaskStatusResponse(
-        id=result.get("id"),
-        model=result.get("model"),
-        status=result.get("status", "unknown"),
-        created_at=result.get("created_at"),
-        updated_at=result.get("updated_at"),
-        content=result.get("content"),
-        usage=result.get("usage"),
-        error=result.get("error"),
-    )
 
 
 async def process_video_task_callback(payload: VideoTaskCallbackRequest, db: Session) -> dict:
@@ -88,6 +61,75 @@ async def process_video_task_callback(payload: VideoTaskCallbackRequest, db: Ses
     return {"received": True, "matched": True, "generation_id": gen.id}
 
 
+
+# --------------------------
+# 回调处理
+# --------------------------
+def get_generation_by_external_id(db: Session, external_id: str) -> Optional[Generation]:
+    """通过外部任务 ID（火山方舟 task_id）查找 Generation 记录。"""
+    return (
+        db.query(Generation)
+        .filter(Generation.external_id == external_id)
+        .first()
+    )
+
+
+def handle_video_task_callback(
+    db: Session,
+    task_id: str,
+    status: str,
+    video_url: Optional[str] = None,
+    error_message: Optional[str] = None,
+    raw_payload: Optional[dict] = None,
+) -> Optional[Generation]:
+    """
+    处理方舟平台视频任务回调，更新 Generation 记录状态。
+    幂等设计：已处于终态（succeeded/failed/expired）的记录不再更新。
+    """
+    gen = get_generation_by_external_id(db, task_id)
+    if not gen:
+        logger.warning("回调找不到对应的 Generation 记录, task_id=%s", task_id)
+        return None
+
+    terminal_statuses = {"succeeded", "failed", "expired"}
+    if gen.status in terminal_statuses:
+        logger.info(
+            "Generation(id=%s) 已处于终态 '%s'，忽略重复回调 status='%s'",
+            gen.id, gen.status, status,
+        )
+        return gen
+
+    logger.info(
+        "回调更新 Generation(id=%s): %s -> %s, task_id=%s",
+        gen.id, gen.status, status, task_id,
+    )
+    gen.status = status
+
+    if status == "succeeded":
+        if video_url:
+            gen.result_url = video_url
+        logger.info(
+            "任务成功，持久化完整数据: Generation(id=%s), video_url=%s",
+            gen.id, video_url,
+        )
+    elif status == "failed":
+        gen.error_message = error_message or "任务失败"
+        logger.warning(
+            "任务失败: Generation(id=%s), error=%s",
+            gen.id, gen.error_message,
+        )
+    elif status == "expired":
+        gen.error_message = error_message or "任务超时"
+        logger.warning(
+            "任务超时: Generation(id=%s)", gen.id,
+        )
+
+    db.commit()
+    db.refresh(gen)
+    return gen
+
+
+
 async def continue_sequential_chain(db: Session, completed_task_id: str, last_frame_url: str) -> None:
     redis_client = get_redis_client()
     chain_key = f"seq_chain:{completed_task_id}"
@@ -109,7 +151,7 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, last_fr
         logger.warning("串行续传: first_frame 缺少 first_frame_url, segment=%s", next_seg.get("segment_id"))
 
     try:
-        from app.services.video_graph.nodes import (
+        from app.services.video_thread_service.video_graph.nodes import (
             build_payload_for_segment,
             create_seedance_video_task,
         )
@@ -318,3 +360,26 @@ async def handle_generation_status_ws(websocket: WebSocket, token: Optional[str]
 
         logger.info("WebSocket 已断开: store_id=%s, code=%s, reason=%s", store_id, close_code, close_reason)
 
+
+# async def query_video_task_status(task_id: str) -> VideoTaskStatusResponse:
+#     try:
+#         result = await query_video_task(task_id)
+#     except ValueError as e:
+#         raise HTTPException(status_code=503, detail=str(e))
+#     except HTTPStatusError as e:
+#         logger.error("Seedance query task upstream error: %s", e.response.text)
+#         raise HTTPException(status_code=e.response.status_code, detail=f"上游 API 错误: {e.response.text}")
+#     except Exception as e:
+#         logger.exception("Seedance query task unexpected error")
+#         raise HTTPException(status_code=500, detail=str(e))
+#
+#     return VideoTaskStatusResponse(
+#         id=result.get("id"),
+#         model=result.get("model"),
+#         status=result.get("status", "unknown"),
+#         created_at=result.get("created_at"),
+#         updated_at=result.get("updated_at"),
+#         content=result.get("content"),
+#         usage=result.get("usage"),
+#         error=result.get("error"),
+#     )

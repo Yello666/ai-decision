@@ -20,19 +20,19 @@ from app.api.deps import get_current_merchant
 from app.core.responses import success
 from app.db.mysql import get_db
 from app.models import Merchant
-from app.schemas.content import VideoTaskCallbackRequest
 from app.schemas.video_thread import (
     CreateThreadRequest,
     ResumeThreadRequest,
     UpdateThreadParamsRequest,
     VideoThreadStatus,
+    VideoTaskCallbackRequest,
 )
-from app.services.generate_service import process_video_task_callback
 from app.services.video_thread_service import (
     create_thread_task,
     get_thread_conversation_history,
     get_thread_view_state,
     list_video_threads,
+    process_video_task_callback,
     resume_thread_task,
     stream_thread_events_response,
     update_thread_params,

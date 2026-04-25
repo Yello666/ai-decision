@@ -16,8 +16,8 @@ from langgraph.graph import END, StateGraph
 
 
 from app.db.postgres import get_checkpointer
-from app.services.video_graph.state import VideoGenerationState
-from app.services.video_graph.nodes import (
+from app.services.video_thread_service.video_graph.state import VideoGenerationState
+from app.services.video_thread_service.video_graph.nodes import (
     apply_edit,
     assemble_and_submit,
     parse_intent,

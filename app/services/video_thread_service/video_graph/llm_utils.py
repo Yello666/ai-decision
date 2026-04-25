@@ -173,7 +173,7 @@ async def call_script_planner(
 
     client = _get_llm_client()
     resp = await client.chat.completions.create(
-        model=settings.LLM_MODEL_35_PLUS,
+        model=settings.LLM_MODEL_36_PLUS,
         messages=[
             {"role": "system", "content": PLANNER_SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
@@ -259,6 +259,18 @@ RULES:
 """
 
 
+TRANSLATE_TO_ZH_SYSTEM_PROMPT = """\
+You are a professional localization assistant for video generation prompts.
+Translate the given English video script into natural Simplified Chinese for user review.
+
+RULES:
+1. Keep semantic meaning unchanged.
+2. Preserve media reference labels exactly, such as [image1], [video1], [audio1], [图1], [视频1], [音频1].
+3. Preserve quoted dialogue, translating the dialogue content into Chinese when appropriate.
+4. Output only translated Simplified Chinese text, no markdown or explanation.
+"""
+
+
 async def call_script_reviser(
     *,
     segments: list[dict],
@@ -283,7 +295,7 @@ async def call_script_reviser(
 
     client = _get_llm_client()
     resp = await client.chat.completions.create(
-        model=settings.LLM_MODEL_35_PLUS,
+        model=settings.LLM_MODEL_36_PLUS,
         messages=[
             {"role": "system", "content": REVISER_SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
@@ -309,7 +321,7 @@ async def translate_to_english(text: str) -> str:
     settings = get_settings()
     client = _get_llm_client()
     resp = await client.chat.completions.create(
-        model=settings.LLM_MODEL_35_PLUS,
+        model=settings.LLM_MODEL_36_PLUS,
         messages=[
             {"role": "system", "content": TRANSLATE_SYSTEM_PROMPT},
             {"role": "user", "content": src},
@@ -321,4 +333,28 @@ async def translate_to_english(text: str) -> str:
     translated = (content or "").strip()
     if not translated:
         raise ValueError("翻译结果为空")
+    return translated
+
+
+async def translate_to_zh(text: str) -> str:
+    """将英文视频脚本翻译为给用户审阅的中文文本。"""
+    src = (text or "").strip()
+    if not src:
+        return ""
+
+    settings = get_settings()
+    client = _get_llm_client()
+    resp = await client.chat.completions.create(
+        model=settings.LLM_MODEL_36_FLASH,
+        messages=[
+            {"role": "system", "content": TRANSLATE_TO_ZH_SYSTEM_PROMPT},
+            {"role": "user", "content": src},
+        ],
+        temperature=0,
+        **_chat_extra_kwargs(max_tokens=TRANSLATE_MAX_TOKENS),
+    )
+    content = resp.choices[0].message.content if resp.choices else ""
+    translated = (content or "").strip()
+    if not translated:
+        raise ValueError("中文翻译结果为空")
     return translated

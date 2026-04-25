@@ -24,19 +24,19 @@ from app.schemas.hotspot import (
     PaginatedTrendResponse,
     RecommendEmailScheduleMode,
 )
-from app.services.hostpot_service.analyse_matching_degree import (
+from app.services.hotspot_service.analyse_matching_degree import (
     batch_match_hotspot_for_brand_async,
 )
-from app.services.hostpot_service.collect_hostspot import collect_and_format_hot_data_async
-from app.services.hostpot_service.recommend_prefs import get_recommend_prefs, sync_recommend_prefs
-from app.services.hostpot_service.recommended_hotspots import build_recommended_hotspots
+from app.services.hotspot_service.collect_hostspot import collect_and_format_hot_data_async
+from app.services.hotspot_service.recommend_prefs import get_recommend_prefs, sync_recommend_prefs
+from app.services.hotspot_service.recommended_hotspots import build_recommended_hotspots
 from app.services.merchant_service import get_brand_by_merchant_id
 
 router = APIRouter(prefix="/hotspot", tags=["hotspot"])
 
 # /recommend 固定与全量热点缓存同源：当前仅 YouTube；匹配模型与 /match 默认一致。
 _RECOMMEND_PLATFORMS: list[str] = ["youtube"]
-_RECOMMEND_LLM_MODEL = HotspotLLMModel.qwen_35_plus
+_RECOMMEND_LLM_MODEL = HotspotLLMModel.qwen_36_plus
 
 
 @router.post("/hot-trends", response_model=PaginatedTrendResponse, summary="获取热点数据（分页）")

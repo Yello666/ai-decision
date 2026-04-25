@@ -9,13 +9,13 @@ from .recommend_email_schedule import (
     MerchantHotspotRecommendEmailSchedule,
 )
 
-__all__ = ["Base", "Merchant", "Hotspot", "Brand", "Generation", "VideoThread"]
 __all__ = [
     "Base",
     "Merchant",
     "Hotspot",
     "Brand",
     "Generation",
+    "VideoThread",
     "MerchantHotspotRecommendEmailSchedule",
     "MerchantHotspotRecommendEmailDelivery",
 ]

@@ -10,20 +10,20 @@ LangGraph 视频生成编排系统 —— 节点实现。
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any
 
 from langgraph.types import interrupt
 
-from app.services.video_graph.event_bus import publish_event
-from app.services.video_graph.state import (
+from app.services.video_thread_service.video_graph.event_bus import publish_event
+from app.services.video_thread_service.video_graph.state import (
     DEFAULT_CONFIG,
     ConfigParams,
     ScriptSegment,
     VideoGenerationState,
 )
-from app.services.video_graph.view_state import format_segments_for_view
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +182,7 @@ async def _prepare_segment_for_submission(
     generate_audio: bool,
 ) -> ScriptSegment:
     """统一规范单个片段：时长、英文 prompt、音频对白引号。"""
-    from app.services.video_graph.llm_utils import translate_to_english
+    from app.services.video_thread_service.video_graph.llm_utils import translate_to_english
 
     normalized = dict(segment)
     duration = normalized.get("duration", 5)
@@ -210,6 +210,31 @@ async def _prepare_segment_for_submission(
     return normalized
 
 
+async def _attach_zh_translation(segment: ScriptSegment) -> ScriptSegment:
+    """用 flash 模型把英文分镜脚本翻译成中文，供前端审阅展示。"""
+    from app.services.video_thread_service.video_graph.llm_utils import translate_to_zh
+
+    normalized = dict(segment)
+    desc = (normalized.get("description") or "").strip()
+    fallback_zh = (normalized.get("description_zh") or "").strip()
+
+    if desc:
+        description_zh = await translate_to_zh(desc)
+    else:
+        description_zh = fallback_zh
+
+    if description_zh:
+        normalized["description_zh"] = description_zh
+    return normalized
+
+
+async def _attach_zh_translations(segments: list[ScriptSegment]) -> list[ScriptSegment]:
+    """并发翻译所有分镜，降低多段脚本的等待时间。"""
+    if not segments:
+        return []
+    return list(await asyncio.gather(*(_attach_zh_translation(seg) for seg in segments)))
+
+
 # ──────────────────────────────────────────────
 # 节点 B：剧情规划与 Prompt 工程
 # ──────────────────────────────────────────────
@@ -218,7 +243,7 @@ async def plan_script(state: VideoGenerationState) -> dict[str, Any]:
     调用 LLM 将用户意图转化为结构化剧本（script_segments）。
     长视频（>12s）自动拆分为多个片段，每段 ≤12s。
     """
-    from app.services.video_graph.llm_utils import call_script_planner
+    from app.services.video_thread_service.video_graph.llm_utils import call_script_planner
 
     thread_id = state.get("thread_id", "")
     await publish_event(thread_id, "progress", {
@@ -287,6 +312,13 @@ async def plan_script(state: VideoGenerationState) -> dict[str, Any]:
         mode=mode,
         media=media,
     )
+    try:
+        normalized_segments = await _attach_zh_translations(normalized_segments)
+    except Exception as e:
+        logger.exception("剧本中文翻译失败")
+        await publish_event(thread_id, "error", {"message": f"剧本中文翻译失败: {e}"})
+        return {"current_step": "error", "error": f"剧本中文翻译失败: {e}"}
+
     strategy = "sequential"
 
     await publish_event(thread_id, "progress", {
@@ -330,9 +362,10 @@ async def human_interrupt(state: VideoGenerationState) -> dict:
 
     display_segments = []
     for seg in segments:
+        desc_zh = seg.get("description_zh")
         display_segments.append({
             "segment_id": seg.get("segment_id"),
-            "description": seg.get("description_zh") if lang == "zh" else seg.get("description"),
+            "description": desc_zh if lang == "zh" else seg.get("description"),
             "duration": seg.get("duration"),
             "mode": seg.get("mode"),
         })
@@ -427,6 +460,13 @@ async def apply_edit(state: VideoGenerationState) -> dict[str, Any]:
         mode=mode,
         media=media,
     )
+    try:
+        current_segments = await _attach_zh_translations(current_segments)
+    except Exception as e:
+        logger.exception("编辑后剧本中文翻译失败")
+        await publish_event(thread_id, "error", {"message": f"编辑后剧本中文翻译失败: {e}"})
+        return {"current_step": "error", "error": f"编辑后剧本中文翻译失败: {e}"}
+
     total_dur = sum(s.get("duration", 5) for s in current_segments)
     return {
         "script_segments": current_segments,
@@ -440,7 +480,7 @@ async def apply_edit(state: VideoGenerationState) -> dict[str, Any]:
 # ──────────────────────────────────────────────
 async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
     """根据用户反馈让 LLM 重写指定 segment 或整体。"""
-    from app.services.video_graph.llm_utils import call_script_reviser
+    from app.services.video_thread_service.video_graph.llm_utils import call_script_reviser
 
     thread_id = state.get("thread_id", "")
     await publish_event(thread_id, "progress", {
@@ -498,6 +538,12 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
         mode=mode,
         media=media,
     )
+    try:
+        normalized_segments = await _attach_zh_translations(normalized_segments)
+    except Exception as e:
+        logger.exception("重写后剧本中文翻译失败")
+        return {"current_step": "error", "error": f"重写后剧本中文翻译失败: {e}"}
+
     return {
         "script_segments": normalized_segments,
         "total_duration": total_dur,
@@ -620,7 +666,7 @@ def build_payload_for_segment(
 
 async def create_seedance_video_task(req) -> dict[str, Any]:
     """提交 Seedance 2.0 视频任务，保留旧节点调用名以降低改动面。"""
-    from app.services.seedance2_service import create_video_task
+    from app.services.seedance_service import create_video_task
 
     return await create_video_task(req)
 

@@ -94,7 +94,7 @@ _STEP_META: dict[str, tuple[FrontendStatus, int, str]] = {
 def format_segments_for_view(segments: list[dict], language: str) -> list[dict]:
     """
     移除后端内部字段（如 image_urls 内部路径等），给前端一个干净的视图。
-    保留 description / description_en 双语字段，便于 UI 切换。
+    保留 description / description_en / description_zh 双语字段，便于 UI 切换。
     """
     result: list[dict] = []
     for seg in segments or []:
@@ -105,6 +105,7 @@ def format_segments_for_view(segments: list[dict], language: str) -> list[dict]:
             "segment_id": seg.get("segment_id"),
             "description": primary,
             "description_en": desc_en,
+            "description_zh": desc_zh,
             "duration": seg.get("duration"),
             "mode": seg.get("mode"),
         })

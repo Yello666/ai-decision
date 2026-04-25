@@ -104,7 +104,7 @@ async def set_analysis_many(
         logger.exception("分析缓存批量写入失败")
 
 
-async def set_analysis(item: CollectTrendObject, analysis: Optional[Dict[str, Any]]) -> None:
-    if not analysis:
-        return
-    await set_analysis_many([item], {item.id: analysis})
+# async def set_analysis(item: CollectTrendObject, analysis: Optional[Dict[str, Any]]) -> None:
+#     if not analysis:
+#         return
+#     await set_analysis_many([item], {item.id: analysis})

@@ -1,22 +1,17 @@
-import logging
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import extract_access_token_from_cookies, get_current_merchant
+from app.api.deps import get_current_merchant
 from app.core.responses import success
 from app.db.mysql import get_db
 from app.models import Merchant
-from app.schemas.content import GenerationOut
+from app.schemas.generations import GenerationOut
 
 from app.services.generation_service import (
     get_generation_by_id,
     list_generations_by_thread_id,
 )
-from app.services.generate_service import handle_generation_status_ws
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/generations", tags=["generations"])
 

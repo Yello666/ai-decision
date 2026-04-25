@@ -3,9 +3,9 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_merchant
 from app.core.responses import success
 from app.db.mysql import get_db
-from app.schemas.hotspot import BrandObject, BrandUpdate
+from app.schemas.hotspot import BrandObject
 from app.schemas.merchant import MerchantOut
-from app.models import Merchant, Brand
+from app.models import Merchant
 from app.services.merchant_service import create_or_update_brand, get_brand_by_merchant_id
 
 router = APIRouter(prefix="/merchant", tags=["merchant"])

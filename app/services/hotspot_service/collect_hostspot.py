@@ -6,28 +6,26 @@ from typing import List, Dict, Any
 
 import httpx
 from openai import OpenAI, AsyncOpenAI
+
+from app.core.config import get_settings
 from app.schemas.hotspot import (
     SentimentCN,
     CollectTrendObject
 )
-from app.services.hostpot_service.analysis_cache import (
+from app.services.hotspot_service.analysis_cache import (
     mget_analysis,
     set_analysis_many,
 )
-from app.services.hostpot_service.get_youtube_trends import get_trending_videos_async
+from app.services.hotspot_service.get_youtube_trends import get_trending_videos_async
 
 logger = logging.getLogger(__name__)
-
-_LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-_LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-b0fc3528ced64aa4b31eca19eb10fb39")
-LLM_MODEL = os.getenv("LLM_MODEL", "qwen-plus")
+settings=get_settings()
+LLM_MODEL = settings.LLM_MODEL_36_FLASH
 
 # proxy=None：强制不走系统/环境变量代理，避免全局代理干扰国内大模型请求
-LLM_CLIENT = OpenAI(base_url=_LLM_BASE_URL, api_key=_LLM_API_KEY, http_client=httpx.Client(proxy=None))
-ASYNC_LLM_CLIENT = AsyncOpenAI(base_url=_LLM_BASE_URL, api_key=_LLM_API_KEY, http_client=httpx.AsyncClient(proxy=None))
+ASYNC_LLM_CLIENT = AsyncOpenAI(base_url=settings.LLM_API_URL, api_key=settings.LLM_API_KEY, http_client=httpx.AsyncClient(proxy=None))
 
 BATCH_SIZE = 10
-
 
 async def collect_and_format_hot_data_async(platforms: List[str], max_results: int = 5) -> List[CollectTrendObject]:
     """
@@ -172,24 +170,6 @@ async def _analyze_with_llm_async(content_list: List[Dict[str, Any]]) -> Dict[st
         return json.loads(content)
     except Exception as e:
         logger.exception("Async LLM analysis failed: %s", e)
-        return {}
-
-
-def _analyze_with_llm(content_list: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """同步调用大模型（保留给同步兼容函数使用）。"""
-    prompt = _build_analysis_prompt(content_list)
-    try:
-        response = LLM_CLIENT.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            response_format={"type": "json_object"},
-        )
-        _log_token_usage(response.usage if hasattr(response, "usage") else None)
-        content = response.choices[0].message.content
-        return json.loads(content)
-    except Exception as e:
-        logger.exception("LLM analysis failed: %s", e)
         return {}
 
 

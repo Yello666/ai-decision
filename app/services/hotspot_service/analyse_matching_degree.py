@@ -19,7 +19,7 @@ from app.schemas.hotspot import (
     RecommendationLevel,
     MatchRadar
 )
-from app.services.hostpot_service.match_cache import (
+from app.services.hotspot_service.match_cache import (
     mget_match,
     set_match_many,
 )
@@ -27,7 +27,7 @@ from app.services.hostpot_service.match_cache import (
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# 你可以用任何兼容 OpenAI API 的后端
+
 # proxy=None：强制不走系统/环境变量代理，避免全局代理干扰国内大模型请求
 LLM_CLIENT = OpenAI(
     base_url=settings.LLM_API_URL,
@@ -39,7 +39,7 @@ ASYNC_LLM_CLIENT = AsyncOpenAI(
     api_key=settings.LLM_API_KEY,
     http_client=httpx.AsyncClient(proxy=None),
 )
-DEFAULT_LLM_MODEL = HotspotLLMModel.qwen_35_plus
+DEFAULT_LLM_MODEL = HotspotLLMModel.qwen_36_plus
 MATCH_BATCH_SIZE = 10
 
 # --------------------------

@@ -15,10 +15,10 @@ from app.schemas.hotspot import (
     HotspotRecommendedItem,
     TrendObject,
 )
-from app.services.hostpot_service.analyse_matching_degree import (
+from app.services.hotspot_service.analyse_matching_degree import (
     batch_match_hotspot_for_brand_async,
 )
-from app.services.hostpot_service.collect_hostspot import collect_and_format_hot_data_async
+from app.services.hotspot_service.collect_hostspot import collect_and_format_hot_data_async
 
 logger = logging.getLogger(__name__)
 

@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter,  Query, WebSocket
 
 from app.api.deps import extract_access_token_from_cookies
-from app.services.generate_service import handle_generation_status_ws
+from app.services.video_thread_service import handle_generation_status_ws
 router = APIRouter(prefix="/video-tasks", tags=["video-tasks"])
 # ----------------------------------------------------------
 # WebSocket — 实时推送视频生成状态变更到前端

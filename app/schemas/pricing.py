@@ -57,7 +57,7 @@ class PricingAnalysisItem(BaseModel):
     )
 
 
-class PricingAnalysisResponse(BaseModel):
-    """Top-level wrapper returned to the frontend."""
-
-    pricing_analysis: List[PricingAnalysisItem]
+# class PricingAnalysisResponse(BaseModel):
+#     """Top-level wrapper returned to the frontend."""
+#
+#     pricing_analysis: List[PricingAnalysisItem]

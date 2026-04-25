@@ -25,8 +25,8 @@ from app.db.postgres import (
 )
 from app.db.redis import get_redis_client, close_redis
 from app.models import Base
-from app.services.hostpot_service.collect_hostspot import collect_and_format_hot_data_async
-from app.services.hostpot_service.recommend_email_scheduler import create_recommend_email_scheduler
+from app.services.hotspot_service.collect_hostspot import collect_and_format_hot_data_async
+from app.services.hotspot_service.recommend_email_scheduler import create_recommend_email_scheduler
 
 settings = get_settings()
 configure_logging()

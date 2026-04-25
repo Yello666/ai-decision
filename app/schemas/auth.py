@@ -10,12 +10,12 @@ class LoginSchema(BaseModel):
     class Config:
         allow_population_by_field_name = True
 
+#
+# class TokenResponse(BaseModel):
+#     access_token: str
+#     refresh_token: str
+#     token_type: str = "bearer"
 
-class TokenResponse(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-
-
+#
 class RefreshRequest(BaseModel):
     refresh_token: str

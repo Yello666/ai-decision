@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.core.responses import success
 from app.schemas.seedance2 import Seedance2VideoRequest
-from app.services.seedance2_service import (
+from app.services.seedance_service import (
     create_video_task,
     query_video_task,
     parse_task_response,

@@ -20,12 +20,6 @@ class MerchantCreate(BaseModel):
     shopify_domain: str
 
 
-class MerchantUpdate(BaseModel):
-    name: Optional[str] = None
-    email: Optional[str] = None
-    shopify_category: Optional[str] = None
-
-
 class MerchantOut(MerchantBase):
     model_config = ConfigDict(from_attributes=True)
     id: int

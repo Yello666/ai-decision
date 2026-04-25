@@ -1,32 +1,12 @@
-# 内容生成服务：视频(SeedDance)、图片(SeedDance)、文字(LLM)
-from .prompt_templates import build_video_prompt, build_image_prompt, build_text_prompt
-from .generation_service import (
-    get_brand_for_store,
-    create_video_generation,
-    create_image_generation,
-    create_text_generation,
-    create_deprecated_text_record,
+# 内容生成服务：视频(SeedDance)
+from .records import (
     get_generation_by_id,
-    get_generation_by_external_id,
-    handle_video_task_callback,
     list_generations,
     list_generations_by_thread_id,
-    refresh_video_status,
 )
 
 __all__ = [
-    "build_video_prompt",
-    "build_image_prompt",
-    "build_text_prompt",
-    "get_brand_for_store",
-    "create_video_generation",
-    "create_image_generation",
-    "create_text_generation",
-    "create_deprecated_text_record",
     "get_generation_by_id",
-    "get_generation_by_external_id",
-    "handle_video_task_callback",
     "list_generations",
     "list_generations_by_thread_id",
-    "refresh_video_status",
 ]

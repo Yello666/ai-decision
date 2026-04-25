@@ -19,14 +19,14 @@ from app.models import (
     MerchantHotspotRecommendEmailSchedule,
 )
 from app.schemas.hotspot import BrandObject, HotspotLLMModel, RecommendEmailScheduleMode, TrendObject
-from app.services.hostpot_service.match_cache import brand_fingerprint, trend_fingerprint
-from app.services.hostpot_service.recommend_email import send_recommendation_email
-from app.services.hostpot_service.recommended_hotspots import build_recommended_hotspots
+from app.services.hotspot_service.match_cache import brand_fingerprint, trend_fingerprint
+from app.services.hotspot_service.recommend_email import send_recommendation_email
+from app.services.hotspot_service.recommended_hotspots import build_recommended_hotspots
 
 logger = logging.getLogger(__name__)
 
 _RECOMMEND_PLATFORMS: list[str] = ["youtube"]
-_RECOMMEND_LLM_MODEL = HotspotLLMModel.qwen_35_plus
+_RECOMMEND_LLM_MODEL = HotspotLLMModel.qwen_36_plus
 _JOB_ID = "scheduled_hotspot_recommend_email"
 """
 定时推荐邮件流程（简述）：
