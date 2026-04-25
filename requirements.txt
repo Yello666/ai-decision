@@ -51,5 +51,8 @@ jieba==0.42.1
 tavily-python==0.5.0
 serpapi
 
+# 阿里云 OSS
+oss2
+
 #火山引擎sdk
 volcengine-python-sdk[ark]

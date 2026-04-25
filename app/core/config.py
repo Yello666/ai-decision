@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # -------- 本地开发开关 --------
     # True  → 使用下方 _LOCAL_* 的虚拟机地址（忽略 .env 中的数据库/Redis 配置）
     # False → 使用 .env 中的云数据库配置（部署时设为 False）
-    LOCAL_DEV: bool = False
+    LOCAL_DEV: bool = True
 
 
     PROJECT_NAME: str = "AI Decision Platform"
@@ -46,6 +46,21 @@ class Settings(BaseSettings):
     # 连接池
     POSTGRES_POOL_MIN: int = 1
     POSTGRES_POOL_MAX: int = 10
+
+    # aliyunOSS
+    AK:str
+    SK:str
+    #后端内网访问的endpoint
+    # Endpoint:str="video-upload-shopai.oss-ap-southeast-1-internal.aliyuncs.com"
+    Endpoint:str="oss-ap-southeast-1.aliyuncs.com"
+    Bucket:str="video-upload-shopai"
+
+
+    #前端上传资源的OSS地址
+    OSS:str="https://video-upload-shopai.oss-ap-southeast-1.aliyuncs.com"
+
+
+
 
     # -------- LangGraph checkpoint 清理策略 --------
     # 工作流到达终态（approve/cancel/respond→END）会主动删除；
@@ -164,6 +179,12 @@ class Settings(BaseSettings):
 
     # Competitor cache（2h）
     COMPETITOR_CACHE_TTL: int = 7200
+
+    # Seedance 2.0 视频生成 (火山引擎方舟)
+    # Model ID 与 API Key 留空占位，由用户自行填写
+    SEEDANCE2_API_KEY: str = "f3a44c8c-783c-492c-bf5d-1f6d3b671ac3"
+    SEEDANCE2_MODEL_ID: str = "doubao-seedance-2-0-260128"
+    SEEDANCE2_API_ENDPOINT: str = "https://ark.cn-beijing.volces.com/api/v3"
 
 
 @lru_cache

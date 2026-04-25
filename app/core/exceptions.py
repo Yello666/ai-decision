@@ -1,4 +1,5 @@
 from fastapi import Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
 
@@ -26,5 +27,9 @@ def http_exception_handler(_: Request, exc) -> JSONResponse:
 def validation_exception_handler(_: Request, exc) -> JSONResponse:
     return JSONResponse(
         status_code=422,
-        content={"code": 422, "message": "validation_error", "data": exc.errors()},
+        content={
+            "code": 422,
+            "message": "validation_error",
+            "data": jsonable_encoder(exc.errors()),
+        },
     )

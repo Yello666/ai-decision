@@ -98,7 +98,7 @@ async def set_analysis_many(
             analysis = analyses.get(item.id)
             if not analysis:
                 continue
-            pipe.set(build_analysis_key(item), json.dumps(analysis, ensure_ascii=False), ex=ttl)
+            await pipe.set(build_analysis_key(item), json.dumps(analysis, ensure_ascii=False), ex=ttl)
         await pipe.execute()
     except Exception:
         logger.exception("分析缓存批量写入失败")
