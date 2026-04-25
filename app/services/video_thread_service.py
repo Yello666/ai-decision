@@ -332,7 +332,7 @@ def _build_param_patch(
     - `config_params` 做字段级 merge（仅覆盖显式传入的字段），并同步更新 `parsed_config`。
     - `media_assets` 整体替换，同步更新 `parsed_media`。
     - `generation_mode` 同时写入 `generation_mode` 与 `parsed_mode`。
-    - 切到 image_to_video / frame_interpolation 时，若新 state 下仍无图片，直接抛 400。
+    - 切到 multimodal_reference 时，若新 state 下仍无图片或视频，直接抛 400。
     """
 
     patch: dict = {}
@@ -352,12 +352,25 @@ def _build_param_patch(
 
     if media_assets is not None:
         media = media_assets.model_dump(mode="json", exclude_none=True)
+        ref_image_urls = list(media.get("ref_image_urls") or [])
+        first_frame_url = media.get("first_frame_url") or ""
+        if first_frame_url:
+            ref_image_urls = [first_frame_url, *ref_image_urls]
         patch["media_assets"] = media
         patch["parsed_media"] = {
-            "ref_image_urls": media.get("ref_image_urls") or [],
-            "first_frame_url": media.get("first_frame_url") or "",
+            "ref_image_urls": ref_image_urls,
+            "reference_video_urls": media.get("reference_video_urls") or [],
+            "reference_audio_urls": media.get("reference_audio_urls") or [],
+            "first_frame_url": first_frame_url,
             "last_frame_url": media.get("last_frame_url") or "",
         }
+        if (
+            patch["parsed_media"]["ref_image_urls"]
+            or patch["parsed_media"]["reference_video_urls"]
+            or patch["parsed_media"]["reference_audio_urls"]
+        ):
+            patch["generation_mode"] = "multimodal_reference"
+            patch["parsed_mode"] = "multimodal_reference"
 
     if generation_mode is not None:
         patch["generation_mode"] = generation_mode
@@ -372,22 +385,29 @@ def _build_param_patch(
         or current_state.get("generation_mode")
         or "text_to_video"
     )
-    if effective_mode in ("image_to_video", "frame_interpolation"):
+    if effective_mode == "multimodal_reference":
         effective_media = patch.get("parsed_media") or current_state.get("parsed_media") or {}
         if not effective_media:
             fallback = current_state.get("media_assets") or {}
+            ref_image_urls = list(fallback.get("ref_image_urls") or [])
+            first_frame_url = fallback.get("first_frame_url") or ""
+            if first_frame_url:
+                ref_image_urls = [first_frame_url, *ref_image_urls]
             effective_media = {
-                "ref_image_urls": fallback.get("ref_image_urls") or [],
-                "first_frame_url": fallback.get("first_frame_url") or "",
+                "ref_image_urls": ref_image_urls,
+                "reference_video_urls": fallback.get("reference_video_urls") or [],
+                "reference_audio_urls": fallback.get("reference_audio_urls") or [],
+                "first_frame_url": first_frame_url,
                 "last_frame_url": fallback.get("last_frame_url") or "",
             }
-        has_images = bool(
-            effective_media.get("ref_image_urls") or effective_media.get("first_frame_url")
+        has_image_or_video = bool(
+            effective_media.get("ref_image_urls")
+            or effective_media.get("reference_video_urls")
         )
-        if not has_images:
+        if not has_image_or_video:
             raise HTTPException(
                 status_code=400,
-                detail=f"mode_{effective_mode}_requires_images",
+                detail="mode_multimodal_reference_requires_image_or_video",
             )
 
     return patch
@@ -466,7 +486,7 @@ async def create_thread_task(payload: CreateThreadRequest, merchant: Merchant) -
         "thread_id": thread_id,
         "user_input": payload.user_input,
         "trend": payload.trend.model_dump(mode="json"),
-        "brand": payload.brand.model_dump(mode="json"),
+        "brand": payload.brand.model_dump(mode="json") if payload.brand else {},
         "product": payload.product.model_dump(mode="json"),
         "generation_mode": payload.generation_mode,
         "media_assets": payload.media_assets.model_dump(mode="json") if payload.media_assets else {},

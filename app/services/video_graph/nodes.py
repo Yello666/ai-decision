@@ -27,8 +27,8 @@ from app.services.video_graph.view_state import format_segments_for_view
 
 logger = logging.getLogger(__name__)
 
-MAX_SEGMENT_DURATION = 12
-MIN_SEGMENT_DURATION = 4  # seedance 1.5 pro 官方下限
+MAX_SEGMENT_DURATION = 15
+MIN_SEGMENT_DURATION = 4  # Seedance 2.0 官方下限
 MAX_REVISION_COUNT = 10  # 视频脚本最大修改轮次
 
 
@@ -56,23 +56,43 @@ async def parse_intent(state: VideoGenerationState) -> dict[str, Any]:
 
     merged_config: ConfigParams = {**DEFAULT_CONFIG, **{k: v for k, v in user_config.items() if v is not None}}
 
-    if mode in ("image_to_video", "frame_interpolation"):
-        ref_image_urls = media.get("ref_image_urls") or []
-        first_frame_url = media.get("first_frame_url")
-        last_frame_url = media.get("last_frame_url")
+    ref_image_urls = media.get("ref_image_urls") or []
+    reference_video_urls = media.get("reference_video_urls") or []
+    reference_audio_urls = media.get("reference_audio_urls") or []
+    first_frame_url = media.get("first_frame_url")
+    last_frame_url = media.get("last_frame_url")
+    if first_frame_url:
+        ref_image_urls = [first_frame_url, *ref_image_urls]
 
         has_images = bool(ref_image_urls or first_frame_url)
         if not has_images:
             err = f"模式 {mode} 需要提供图片 URL，请上传图片后重试。"
             await publish_event(thread_id, "error", {"message": err})
             return {"current_step": "error", "error": err}
+        if reference_audio_urls and not has_image_or_video:
+            err = "参考音频不能作为唯一多模态素材，请同时上传参考图或参考视频。"
+            await publish_event(thread_id, "error", {"message": err})
+            return {"current_step": "error", "error": err}
+    elif mode == "text_to_video":
+        # 纯文生入口不强依赖素材；若用户上传了素材，后续按多模态模式处理。
+        pass
     else:
-        ref_image_urls = []
-        first_frame_url = None
-        last_frame_url = None
+        err = f"不支持的 Seedance2 生成模式: {mode}"
+        await publish_event(thread_id, "error", {"message": err})
+        return {"current_step": "error", "error": err}
+
+    if ref_image_urls or reference_video_urls or reference_audio_urls:
+        mode = "multimodal_reference"
+        has_image_or_video = bool(ref_image_urls or reference_video_urls)
+        if reference_audio_urls and not has_image_or_video:
+            err = "参考音频不能作为唯一多模态素材，请同时上传参考图或参考视频。"
+            await publish_event(thread_id, "error", {"message": err})
+            return {"current_step": "error", "error": err}
 
     parsed_media = {
         "ref_image_urls": ref_image_urls,
+        "reference_video_urls": reference_video_urls,
+        "reference_audio_urls": reference_audio_urls,
         "first_frame_url": first_frame_url or "",
         "last_frame_url": last_frame_url or "",
     }
@@ -124,6 +144,35 @@ def _looks_like_english(text: str) -> bool:
     zh_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
     en_chars = len(re.findall(r"[A-Za-z]", text))
     return zh_chars == 0 or en_chars >= zh_chars
+
+
+def _has_multimodal_media(media: dict) -> bool:
+    return bool(
+        media.get("ref_image_urls")
+        or media.get("reference_video_urls")
+        or media.get("reference_audio_urls")
+    )
+
+
+def _enforce_seedance2_segment_modes(
+    segments: list[ScriptSegment],
+    *,
+    mode: str,
+    media: dict,
+) -> list[ScriptSegment]:
+    """确保分段模式符合 Seedance2 串行策略。"""
+    use_multimodal = mode == "multimodal_reference" or _has_multimodal_media(media)
+    normalized: list[ScriptSegment] = []
+    for idx, segment in enumerate(segments):
+        updated = dict(segment)
+        if use_multimodal:
+            updated["mode"] = "multimodal_reference"
+        elif idx == 0:
+            updated["mode"] = "text_to_video"
+        else:
+            updated["mode"] = "first_frame"
+        normalized.append(updated)
+    return normalized
 
 
 async def _prepare_segment_for_submission(
@@ -233,10 +282,12 @@ async def plan_script(state: VideoGenerationState) -> dict[str, Any]:
         return {"current_step": "error", "error": f"剧本标准化失败: {e}"}
 
     total_dur = sum(s.get("duration", 5) for s in normalized_segments) #把所有片段的时长加起来计算出总时长
-    has_frame_dep = any( #如果片段中有frame_interpolation模式，则执行策略为sequential，否则为parallel
-        s.get("mode") == "frame_interpolation" for s in normalized_segments[1:]
+    normalized_segments = _enforce_seedance2_segment_modes(
+        normalized_segments,
+        mode=mode,
+        media=media,
     )
-    strategy = "sequential" if has_frame_dep else "parallel"
+    strategy = "sequential"
 
     await publish_event(thread_id, "progress", {
         "progress": 55,
@@ -369,6 +420,13 @@ async def apply_edit(state: VideoGenerationState) -> dict[str, Any]:
                     "error": f"编辑片段标准化失败(segment={sid}): {e}",
                 }
 
+    mode = state.get("parsed_mode", "text_to_video")
+    media = state.get("parsed_media", {})
+    current_segments = _enforce_seedance2_segment_modes(
+        current_segments,
+        mode=mode,
+        media=media,
+    )
     total_dur = sum(s.get("duration", 5) for s in current_segments)
     return {
         "script_segments": current_segments,
@@ -433,14 +491,17 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
         return {"current_step": "error", "error": f"重写后剧本标准化失败: {e}"}
 
     total_dur = sum(s.get("duration", 5) for s in normalized_segments)
-    has_frame_dep = any(
-        s.get("mode") == "frame_interpolation" for s in normalized_segments[1:]
+    mode = state.get("parsed_mode", "text_to_video")
+    media = state.get("parsed_media", {})
+    normalized_segments = _enforce_seedance2_segment_modes(
+        normalized_segments,
+        mode=mode,
+        media=media,
     )
-
     return {
         "script_segments": normalized_segments,
         "total_duration": total_dur,
-        "execution_strategy": "sequential" if has_frame_dep else "parallel",
+        "execution_strategy": "sequential",
         "revision_count": revision_count + 1,
         "current_step": "plan_script_done",
     }
@@ -449,15 +510,127 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
 # ──────────────────────────────────────────────
 # 节点 D：API 组装与执行
 # ──────────────────────────────────────────────
+CALLBACK_URL = "https://shop-ai.xin/api/v1/video-thread/callback"
+
+
+def _as_str_list(value: Any) -> list[str]:
+    if not value:
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _shift_image_reference_labels(prompt: str, offset: int = 1) -> str:
+    """多模态续段插入上一段尾帧后，将原有 [图n] 引用整体后移。"""
+    if not prompt or offset == 0:
+        return prompt
+    return re.sub(
+        r"\[图(\d+)\]",
+        lambda match: f"[图{int(match.group(1)) + offset}]",
+        prompt,
+    )
+
+
+def _build_multimodal_prompt(prompt: str, *, has_continuity_frame: bool) -> str:
+    if not has_continuity_frame:
+        return prompt
+    shifted = _shift_image_reference_labels(prompt)
+    return (
+        "Use [图1] as the continuity first-frame reference inherited from the previous segment's last frame; "
+        "keep the same character, product placement, lighting, and visual style. "
+        f"{shifted}"
+    )
+
+
+def build_payload_for_segment(
+    segment: dict,
+    config: dict,
+    media: dict | None = None,
+    *,
+    first_frame_url: str = "",
+):
+    """将单个脚本片段包装成 Seedance 2.0 请求对象。"""
+    from app.schemas.seedance2 import Seedance2VideoRequest
+
+    media = media or {}
+    mode = segment.get("mode") or "text_to_video"
+    prompt = (segment.get("description") or "").strip()
+    if not prompt:
+        raise ValueError("segment description 不能为空")
+
+    duration = segment.get("duration", 5)
+    if not isinstance(duration, int) or duration == -1:
+        duration = 5
+    duration = max(MIN_SEGMENT_DURATION, min(duration, MAX_SEGMENT_DURATION))
+
+    common: dict[str, Any] = {
+        "prompt": prompt,
+        "duration": duration,
+        "ratio": config.get("ratio") or DEFAULT_CONFIG["ratio"],
+        "resolution": config.get("resolution") or DEFAULT_CONFIG["resolution"],
+        "watermark": config.get("watermark", DEFAULT_CONFIG["watermark"]),
+        "generate_audio": config.get("generate_audio", DEFAULT_CONFIG["generate_audio"]),
+        "callback_url": CALLBACK_URL,
+        "return_last_frame": True,
+    }
+
+    if mode == "multimodal_reference":
+        base_images = _as_str_list(
+            segment.get("reference_image_urls")
+            or segment.get("image_urls")
+            or media.get("ref_image_urls")
+        )
+        reference_videos = _as_str_list(
+            segment.get("reference_video_urls") or media.get("reference_video_urls")
+        )
+        reference_audio = _as_str_list(
+            segment.get("reference_audio_urls") or media.get("reference_audio_urls")
+        )
+        has_continuity_frame = bool(first_frame_url)
+        reference_images = (
+            [first_frame_url, *base_images][:9]
+            if has_continuity_frame
+            else base_images[:9]
+        )
+        if not (reference_images or reference_videos):
+            raise ValueError("multimodal_reference 模式需要至少包含参考图或参考视频")
+        common["prompt"] = _build_multimodal_prompt(
+            prompt,
+            has_continuity_frame=has_continuity_frame,
+        )
+        return Seedance2VideoRequest(
+            mode="multimodal_reference",
+            reference_image_urls=reference_images,
+            reference_video_urls=reference_videos[:3],
+            reference_audio_urls=reference_audio[:3],
+            **common,
+        )
+
+    if mode == "first_frame":
+        frame_url = first_frame_url or segment.get("first_frame_url") or ""
+        if not frame_url:
+            raise ValueError("first_frame 模式缺少 first_frame_url")
+        return Seedance2VideoRequest(
+            mode="first_frame",
+            first_frame_url=frame_url,
+            **common,
+        )
+
+    return Seedance2VideoRequest(mode="text_to_video", **common)
+
+
+async def create_seedance_video_task(req) -> dict[str, Any]:
+    """提交 Seedance 2.0 视频任务，保留旧节点调用名以降低改动面。"""
+    from app.services.seedance2_service import create_video_task
+
+    return await create_video_task(req)
+
+
 async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
     """
     根据 script_segments 构建 Seedance payload 并提交任务。
     按 execution_strategy 决定串行/并行执行。
     """
-    import asyncio
     import json as _json
-    from app.services.video_graph.payload_builder import build_payload_for_segment
-    from app.services.seedance_client import create_seedance_video_task
     from app.db.redis import get_redis_client
 
     thread_id = state.get("thread_id", "")
@@ -469,83 +642,59 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
 
     segments = state.get("script_segments", [])
     config = state.get("parsed_config", DEFAULT_CONFIG)
-    strategy = state.get("execution_strategy", "parallel")
     store_id = state.get("shopify_store_id", "")
+    media = state.get("parsed_media") or {}
 
     task_results = []
 
-    if strategy == "sequential":
-        first_seg = dict(segments[0]) if segments else {}
-        if not first_seg:
-            return {
-                "task_results": [],
-                "final_status": "failed",
-                "error": "无剧本片段可提交",
-                "current_step": "error",
+    first_seg = dict(segments[0]) if segments else {}
+    if not first_seg:
+        return {
+            "task_results": [],
+            "final_status": "failed",
+            "error": "无剧本片段可提交",
+            "current_step": "error",
+        }
+
+    payload = build_payload_for_segment(first_seg, config, media)
+    try:
+        result = await create_seedance_video_task(payload)
+        task_id = result.get("id", "")
+        task_results.append({
+            "segment_id": first_seg.get("segment_id"),
+            "task_id": task_id,
+            "status": result.get("status", "submitted"),
+            "prompt": first_seg.get("description", ""),
+        })
+
+        if task_id and len(segments) > 1:
+            redis_client = get_redis_client()
+            chain_data = {
+                "remaining_segments": [dict(s) for s in segments[1:]],
+                "config": dict(config),
+                "media": dict(media),
+                "store_id": store_id,
+                "thread_id": thread_id,
+                "trend": state.get("trend", {}),
+                "brand": state.get("brand", {}),
             }
-
-        payload = build_payload_for_segment(first_seg, config)
-        try:
-            result = await create_seedance_video_task(payload)
-            task_id = result.get("id", "")
-            task_results.append({
-                "segment_id": first_seg.get("segment_id"),
-                "task_id": task_id,
-                "status": result.get("status", "submitted"),
-                "prompt": first_seg.get("description", ""),
-            })
-
-            if task_id and len(segments) > 1:
-                redis_client = get_redis_client()
-                chain_data = {
-                    "remaining_segments": [dict(s) for s in segments[1:]],
-                    "config": dict(config),
-                    "store_id": store_id,
-                    "trend": state.get("trend", {}),
-                    "brand": state.get("brand", {}),
-                }
-                await redis_client.set(
-                    f"seq_chain:{task_id}",
-                    _json.dumps(chain_data, ensure_ascii=False),
-                    ex=86400,
-                )
-                logger.info(
-                    "串行链条已存入 Redis: task_id=%s, 剩余 %d 段",
-                    task_id, len(segments) - 1,
-                )
-        except Exception as e:
-            logger.exception("Seedance 首段任务提交失败")
-            task_results.append({
-                "segment_id": first_seg.get("segment_id"),
-                "task_id": "",
-                "status": "failed",
-                "prompt": first_seg.get("description", ""),
-            })
-    else:
-        payloads = [build_payload_for_segment(seg, config) for seg in segments]
-
-        async def _submit(seg: dict, payload: dict) -> dict:
-            try:
-                result = await create_seedance_video_task(payload)
-                return {
-                    "segment_id": seg.get("segment_id"),
-                    "task_id": result.get("id", ""),
-                    "status": result.get("status", "submitted"),
-                    "prompt": seg.get("description", ""),
-                }
-            except Exception as e:
-                logger.exception("Seedance 任务提交失败: segment=%s", seg.get("segment_id"))
-                return {
-                    "segment_id": seg.get("segment_id"),
-                    "task_id": "",
-                    "status": "failed",
-                    "prompt": seg.get("description", ""),
-                }
-
-        task_results = await asyncio.gather(
-            *[_submit(seg, pl) for seg, pl in zip(segments, payloads)]
-        )
-        task_results = list(task_results)
+            await redis_client.set(
+                f"seq_chain:{task_id}",
+                _json.dumps(chain_data, ensure_ascii=False),
+                ex=86400,
+            )
+            logger.info(
+                "Seedance2 串行链条已存入 Redis: task_id=%s, 剩余 %d 段",
+                task_id, len(segments) - 1,
+            )
+    except Exception:
+        logger.exception("Seedance2 首段任务提交失败")
+        task_results.append({
+            "segment_id": first_seg.get("segment_id"),
+            "task_id": "",
+            "status": "failed",
+            "prompt": first_seg.get("description", ""),
+        })
 
     all_ok = all(r.get("status") != "failed" for r in task_results)
     await publish_event(thread_id, "progress", {

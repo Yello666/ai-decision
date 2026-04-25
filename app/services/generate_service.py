@@ -18,8 +18,7 @@ from app.models import Generation
 from app.schemas.content import VideoTaskCallbackRequest, VideoTaskStatusResponse
 from app.services.generation_service import handle_video_task_callback
 from app.services.notification_service import publish_generation_status
-from app.services.seedance_client import create_seedance_video_task, query_seedance_video_task
-from app.services.video_graph.payload_builder import build_payload_for_segment
+from app.services.seedance2_service import query_video_task
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,7 @@ WS_CLOSE_INVALID_CLIENT_JSON = 1008
 
 async def query_video_task_status(task_id: str) -> VideoTaskStatusResponse:
     try:
-        result = await query_seedance_video_task(task_id)
+        result = await query_video_task(task_id)
     except ValueError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except HTTPStatusError as e:
@@ -104,15 +103,28 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, last_fr
     await redis_client.delete(chain_key)
 
     next_seg = dict(remaining[0])
-    if next_seg.get("mode") == "frame_interpolation" and last_frame_url:
+    if next_seg.get("mode") == "first_frame" and last_frame_url:
         next_seg["first_frame_url"] = last_frame_url
-    elif next_seg.get("mode") == "frame_interpolation" and not next_seg.get("first_frame_url"):
-        logger.warning("串行续传: frame_interpolation 缺少 first_frame_url, segment=%s", next_seg.get("segment_id"))
+    elif next_seg.get("mode") == "first_frame" and not next_seg.get("first_frame_url"):
+        logger.warning("串行续传: first_frame 缺少 first_frame_url, segment=%s", next_seg.get("segment_id"))
 
     try:
-        payload = build_payload_for_segment(next_seg, chain_data.get("config", {}))
+        from app.services.video_graph.nodes import (
+            build_payload_for_segment,
+            create_seedance_video_task,
+        )
+
+        payload = build_payload_for_segment(
+            next_seg,
+            chain_data.get("config", {}),
+            chain_data.get("media", {}),
+            first_frame_url=last_frame_url,
+        )
         result = await create_seedance_video_task(payload)
         new_task_id = result.get("id", "")
+        if not new_task_id:
+            logger.error("串行续传提交未返回 task_id: segment=%s", next_seg.get("segment_id"))
+            return
     except Exception:
         logger.exception("串行续传提交失败: segment=%s", next_seg.get("segment_id"))
         return
@@ -121,6 +133,7 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, last_fr
         shopify_store_id=chain_data.get("store_id", ""),
         type="video",
         status="queued",
+        thread_id=chain_data.get("thread_id") or None,
         prompt_used=next_seg.get("description", ""),
         trend_snapshot=chain_data.get("trend"),
         brand_snapshot=chain_data.get("brand"),

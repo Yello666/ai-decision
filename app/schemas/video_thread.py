@@ -12,7 +12,7 @@ class ConfigParamsInput(BaseModel):
     # 仅序列化用户显式传入的字段，避免默认值误覆盖已有 state。
     resolution: Optional[Literal["480p", "720p"]] = None
     ratio: Optional[
-        Literal["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16", "21:9"]
+        Literal["16:9", "9:16", "1:1", "3:4", "4:3", "21:9", "adaptive"]
     ] = None
     language: Optional[Literal["zh", "en"]] = None
     watermark: Optional[bool] = None
@@ -20,38 +20,46 @@ class ConfigParamsInput(BaseModel):
 
 
 class MediaAssetsInput(BaseModel):
-    """图生视频 / 首尾帧插帧等所需的媒体 URL（与 OpenAPI Schema example 一致）。"""
+    """Seedance 2.0 多模态参考生成所需的媒体 URL。"""
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
                 "ref_image_urls": ["https://example.com/a.jpg"],
-                "first_frame_url": "https://example.com/first.jpg",
-                "last_frame_url": "https://example.com/last.jpg",
+                "reference_video_urls": ["https://example.com/style.mp4"],
+                "reference_audio_urls": ["https://example.com/voice.mp3"],
             }
         }
     )
 
     ref_image_urls: list[AnyHttpUrl] = Field(
         default_factory=list,
-        description="参考图 URL 列表；image_to_video 时建议 1～4 张，纯文生视频可为空列表",
+        description="参考图 URL 列表；multimodal_reference 时最多 9 张，纯文生视频可为空列表",
+    )
+    reference_video_urls: list[AnyHttpUrl] = Field(
+        default_factory=list,
+        description="参考视频 URL 列表；multimodal_reference 时最多 3 个",
+    )
+    reference_audio_urls: list[AnyHttpUrl] = Field(
+        default_factory=list,
+        description="参考音频 URL 列表；multimodal_reference 时最多 3 段，且不能作为唯一参考素材",
     )
     first_frame_url: Optional[AnyHttpUrl] = Field(
         default=None,
-        description="首帧图 URL（frame_interpolation 等需要首尾帧时使用）",
+        description="兼容字段：首帧图 URL；提交 Seedance2 时会作为参考图使用",
     )
     last_frame_url: Optional[AnyHttpUrl] = Field(
         default=None,
-        description="尾帧图 URL（frame_interpolation 等需要首尾帧时使用）",
+        description="兼容字段：尾帧图 URL；当前 Seedance2 多段链路不直接使用",
     )
 
 
 class CreateThreadRequest(BaseModel):
     trend: TrendObject = Field(..., description="TrendObject 热点信息")
-    brand: BrandObject = Field(..., description="BrandObject 品牌信息")
+    brand: Optional[BrandObject] = Field(default=None, description="BrandObject 品牌信息(可选)")
     product: ProductObject = Field(..., description="ProductObject 产品信息")
     user_input: str = Field(default="", description="用户对视频的想法/要求")
-    generation_mode: Literal["text_to_video", "image_to_video", "frame_interpolation"] = "text_to_video"
+    generation_mode: Literal["text_to_video", "multimodal_reference"] = "text_to_video"
     media_assets: Optional[MediaAssetsInput] = Field(
         default=None,
         description=(
@@ -66,8 +74,8 @@ class EditedSegmentInput(BaseModel):
     segment_id: int
     description: Optional[str] = None
     description_zh: Optional[str] = None
-    duration: Optional[int] = Field(default=None, ge=4, le=12)
-    mode: Optional[Literal["text_to_video", "image_to_video", "frame_interpolation"]] = None
+    duration: Optional[int] = Field(default=None, ge=4, le=15)
+    mode: Optional[Literal["text_to_video", "multimodal_reference", "first_frame"]] = None
 
 
 class ResumeThreadRequest(BaseModel):
@@ -86,10 +94,10 @@ class ResumeThreadRequest(BaseModel):
         description="可选的媒体素材整体替换（传入即整体覆盖 state 中的 media_assets）",
     )
     generation_mode: Optional[
-        Literal["text_to_video", "image_to_video", "frame_interpolation"]
+        Literal["text_to_video", "multimodal_reference"]
     ] = Field(
         default=None,
-        description="可选的生成模式切换；切到 image_to_video / frame_interpolation 时需同时提供含图的 media_assets",
+        description="可选的生成模式切换；切到 multimodal_reference 时需同时提供图片或视频参考素材",
     )
 
 
@@ -102,7 +110,7 @@ class UpdateThreadParamsRequest(BaseModel):
     config_params: Optional[ConfigParamsInput] = None
     media_assets: Optional[MediaAssetsInput] = None
     generation_mode: Optional[
-        Literal["text_to_video", "image_to_video", "frame_interpolation"]
+        Literal["text_to_video", "multimodal_reference"]
     ] = None
 
 

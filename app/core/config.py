@@ -71,43 +71,6 @@ class Settings(BaseSettings):
     # 后台扫描周期（小时）
     CHECKPOINT_SWEEP_INTERVAL_HOURS: int = 24
 
-
-    # -------- 本地开发配置（仅 LOCAL_DEV=True 时生效） --------
-    _LOCAL_MYSQL_HOST: str = "localhost"
-    _LOCAL_MYSQL_PASSWORD: str = "123456"
-    _LOCAL_MYSQL_USER: str = "root"
-    _LOCAL_MYSQL_PORT: int = 3306
-    _LOCAL_REDIS_HOST: str = "127.0.0.1"
-    _LOCAL_REDIS_PASSWORD: str = ""
-    _LOCAL_SHOPIFY_REDIRECT_URL:str = "http://127.0.0.1:8000/api/v1/auth/shopify/callback"
-
-    @model_validator(mode="after")
-    def _apply_local_dev_overrides(self) -> "Settings":
-        """LOCAL_DEV=True 时，强制使用虚拟机地址，优先级高于 .env"""
-        if self.LOCAL_DEV:
-            self.MYSQL_HOST = self._LOCAL_MYSQL_HOST
-            self.MYSQL_PASSWORD = self._LOCAL_MYSQL_PASSWORD
-            self.MYSQL_USER = self._LOCAL_MYSQL_USER
-            self.MYSQL_PORT = self._LOCAL_MYSQL_PORT
-            self.REDIS_HOST = self._LOCAL_REDIS_HOST
-            self.REDIS_PASSWORD = self._LOCAL_REDIS_PASSWORD
-            self.SHOPIFY_REDIRECT_URI=self._LOCAL_SHOPIFY_REDIRECT_URL
-            # 本地 HTTP 开发：Secure cookie 不会在 http 下发送
-            self.COOKIE_SECURE = False
-        return self
-
-    @model_validator(mode="after")
-    def _validate_ws_heartbeat_config(self) -> "Settings":
-        """WebSocket：pong 超时时长必须大于心跳间隔，否则必然误判离线。"""
-        if self.WS_PONG_TIMEOUT_SECONDS <= self.WS_HEARTBEAT_INTERVAL_SECONDS:
-            raise ValueError(
-                "WS_PONG_TIMEOUT_SECONDS must be greater than WS_HEARTBEAT_INTERVAL_SECONDS "
-                f"(got pong_timeout={self.WS_PONG_TIMEOUT_SECONDS}, "
-                f"heartbeat_interval={self.WS_HEARTBEAT_INTERVAL_SECONDS})"
-            )
-        return self
-
-
     # JWT
     JWT_SECRET_KEY: str
     JWT_REFRESH_SECRET_KEY: str
@@ -174,7 +137,8 @@ class Settings(BaseSettings):
     # LLM (Qwen / DashScope)
     LLM_API_KEY: Optional[str] = None
     LLM_API_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    LLM_MODEL: str = "qwen3.5-plus"
+    LLM_MODEL_35_PLUS: str = "qwen3.5-plus"
+    LLM_MODEL_35_FLASH: str = "qwen3.5-flash"
 
 
     # Agent LLM (Volcengine / Doubao)
@@ -206,3 +170,38 @@ def get_settings() -> Settings:
         return Settings(_env_file=None)
     except OSError:
         return Settings(_env_file=None)
+
+    # -------- 本地开发配置（仅 LOCAL_DEV=True 时生效） --------
+    _LOCAL_MYSQL_HOST: str = "localhost"
+    _LOCAL_MYSQL_PASSWORD: str = "123456"
+    _LOCAL_MYSQL_USER: str = "root"
+    _LOCAL_MYSQL_PORT: int = 3306
+    _LOCAL_REDIS_HOST: str = "127.0.0.1"
+    _LOCAL_REDIS_PASSWORD: str = ""
+    _LOCAL_SHOPIFY_REDIRECT_URL:str = "http://127.0.0.1:8000/api/v1/auth/shopify/callback"
+
+    @model_validator(mode="after")
+    def _apply_local_dev_overrides(self) -> "Settings":
+        """LOCAL_DEV=True 时，强制使用虚拟机地址，优先级高于 .env"""
+        if self.LOCAL_DEV:
+            self.MYSQL_HOST = self._LOCAL_MYSQL_HOST
+            self.MYSQL_PASSWORD = self._LOCAL_MYSQL_PASSWORD
+            self.MYSQL_USER = self._LOCAL_MYSQL_USER
+            self.MYSQL_PORT = self._LOCAL_MYSQL_PORT
+            self.REDIS_HOST = self._LOCAL_REDIS_HOST
+            self.REDIS_PASSWORD = self._LOCAL_REDIS_PASSWORD
+            self.SHOPIFY_REDIRECT_URI=self._LOCAL_SHOPIFY_REDIRECT_URL
+            # 本地 HTTP 开发：Secure cookie 不会在 http 下发送
+            self.COOKIE_SECURE = False
+        return self
+
+    @model_validator(mode="after")
+    def _validate_ws_heartbeat_config(self) -> "Settings":
+        """WebSocket：pong 超时时长必须大于心跳间隔，否则必然误判离线。"""
+        if self.WS_PONG_TIMEOUT_SECONDS <= self.WS_HEARTBEAT_INTERVAL_SECONDS:
+            raise ValueError(
+                "WS_PONG_TIMEOUT_SECONDS must be greater than WS_HEARTBEAT_INTERVAL_SECONDS "
+                f"(got pong_timeout={self.WS_PONG_TIMEOUT_SECONDS}, "
+                f"heartbeat_interval={self.WS_HEARTBEAT_INTERVAL_SECONDS})"
+            )
+        return self

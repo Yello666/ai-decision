@@ -44,7 +44,7 @@ async def _optimize_prompt_via_llm(raw_prompt: str) -> str:
     try:
         client = _get_llm_client()
         resp = await client.chat.completions.create(
-            model=settings.LLM_MODEL,
+            model=settings.LLM_MODEL_35_PLUS,
             messages=[{"role": "user", "content": raw_prompt}],
             temperature=0.7,
         )

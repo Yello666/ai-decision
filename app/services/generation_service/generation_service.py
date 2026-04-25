@@ -211,7 +211,7 @@ def _call_llm_for_text(prompt: str) -> str:
         raise ValueError("未配置 LLM_API_KEY，无法生成文字")
     # proxy=None：强制不走系统/环境变量代理，避免全局代理干扰国内大模型请求
     client = OpenAI(api_key=api_key, base_url=base_url, http_client=httpx.Client(proxy=None))
-    model = settings.LLM_MODEL
+    model = settings.LLM_MODEL_35_PLUS
     resp = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],

@@ -16,10 +16,13 @@ class ScriptSegment(TypedDict, total=False):
     description: str
     description_zh: str
     duration: int
-    mode: Literal["text_to_video", "image_to_video", "frame_interpolation"]
+    mode: Literal["text_to_video", "multimodal_reference", "first_frame"]
     image_urls: list[str]
     first_frame_url: str
     last_frame_url: str
+    reference_image_urls: list[str]
+    reference_video_urls: list[str]
+    reference_audio_urls: list[str]
 
 
 class ConfigParams(TypedDict, total=False):
@@ -66,13 +69,13 @@ class VideoGenerationState(TypedDict, total=False):
     trend: dict
     brand: dict
     product: dict
-    generation_mode: Literal["text_to_video", "image_to_video", "frame_interpolation"]
+    generation_mode: Literal["text_to_video", "multimodal_reference"]
     media_assets: dict
     config_params: ConfigParams
     shopify_store_id: str
 
     # ---- 节点 A 提取结果 ----
-    parsed_mode: Literal["text_to_video", "image_to_video", "frame_interpolation"]
+    parsed_mode: Literal["text_to_video", "multimodal_reference"]
     parsed_config: ConfigParams
     parsed_media: dict
     audio_prompt_fixed: bool
