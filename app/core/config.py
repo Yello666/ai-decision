@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
     JWT_REFRESH_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080  # 7天
 
     # ------------------------------
@@ -138,6 +138,7 @@ class Settings(BaseSettings):
     LLM_API_KEY: Optional[str] = None
     LLM_API_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     LLM_MODEL_36_PLUS: str = "qwen3.6-plus"
+    LLM_MODEL_35_PLUS: str = "qwen3.5-plus"
     LLM_MODEL_36_FLASH: str = "qwen3.6-flash-2026-04-16"
 
     VOLCENGINE_API_KEY: str

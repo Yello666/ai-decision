@@ -18,8 +18,6 @@ class ScriptSegment(TypedDict, total=False):
     duration: int
     mode: Literal["text_to_video", "multimodal_reference", "first_frame"]
     image_urls: list[str]
-    first_frame_url: str
-    last_frame_url: str
     reference_image_urls: list[str]
     reference_video_urls: list[str]
     reference_audio_urls: list[str]
@@ -69,6 +67,7 @@ class VideoGenerationState(TypedDict, total=False):
     trend: dict
     brand: dict
     product: dict
+    product_for_prompt: dict
     generation_mode: Literal["text_to_video", "multimodal_reference"]
     media_assets: dict
     config_params: ConfigParams

@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 MAX_SEGMENT_DURATION = 15
 MIN_SEGMENT_DURATION = 4  # Seedance 2.0 官方下限
 MAX_REVISION_COUNT = 10  # 视频脚本最大修改轮次
+MEDIA_REFERENCE_TAG_RE = re.compile(r"\[(?:image|video|audio|图|视频|音频)\d+\]", re.IGNORECASE)
 
 
 # ──────────────────────────────────────────────
@@ -56,45 +57,39 @@ async def parse_intent(state: VideoGenerationState) -> dict[str, Any]:
 
     merged_config: ConfigParams = {**DEFAULT_CONFIG, **{k: v for k, v in user_config.items() if v is not None}}
 
-    ref_image_urls = media.get("ref_image_urls") or []
+    ref_image_urls = _as_str_list(media.get("ref_image_urls") or [])
+    product_image_url = str((state.get("product_for_prompt") or {}).get("image_url") or "").strip()
+    if product_image_url and product_image_url not in ref_image_urls:
+        ref_image_urls = [product_image_url, *ref_image_urls]
     reference_video_urls = media.get("reference_video_urls") or []
     reference_audio_urls = media.get("reference_audio_urls") or []
-    first_frame_url = media.get("first_frame_url")
-    last_frame_url = media.get("last_frame_url")
-    if first_frame_url:
-        ref_image_urls = [first_frame_url, *ref_image_urls]
 
-        has_images = bool(ref_image_urls or first_frame_url)
-        if not has_images:
-            err = f"模式 {mode} 需要提供图片 URL，请上传图片后重试。"
-            await publish_event(thread_id, "error", {"message": err})
-            return {"current_step": "error", "error": err}
-        if reference_audio_urls and not has_image_or_video:
-            err = "参考音频不能作为唯一多模态素材，请同时上传参考图或参考视频。"
-            await publish_event(thread_id, "error", {"message": err})
-            return {"current_step": "error", "error": err}
-    elif mode == "text_to_video":
-        # 纯文生入口不强依赖素材；若用户上传了素材，后续按多模态模式处理。
-        pass
-    else:
+    if mode not in {"text_to_video", "multimodal_reference"}:
         err = f"不支持的 Seedance2 生成模式: {mode}"
         await publish_event(thread_id, "error", {"message": err})
         return {"current_step": "error", "error": err}
-
+    #只要有参考图参考视频参考音频这些参数，就视模型为"multimodal_reference"模式
     if ref_image_urls or reference_video_urls or reference_audio_urls:
         mode = "multimodal_reference"
+
+    if mode == "multimodal_reference":
         has_image_or_video = bool(ref_image_urls or reference_video_urls)
         if reference_audio_urls and not has_image_or_video:
             err = "参考音频不能作为唯一多模态素材，请同时上传参考图或参考视频。"
             await publish_event(thread_id, "error", {"message": err})
             return {"current_step": "error", "error": err}
+        if not has_image_or_video:
+            err = f"模式 {mode} 需要提供参考图或参考视频，请上传素材后重试。"
+            await publish_event(thread_id, "error", {"message": err})
+            return {"current_step": "error", "error": err}
+    elif mode == "text_to_video":
+        # 纯文生入口不强依赖素材；若用户上传了素材，后续按多模态模式处理。
+        pass
 
     parsed_media = {
         "ref_image_urls": ref_image_urls,
         "reference_video_urls": reference_video_urls,
         "reference_audio_urls": reference_audio_urls,
-        "first_frame_url": first_frame_url or "",
-        "last_frame_url": last_frame_url or "",
     }
 
     audio_fixed = False
@@ -146,12 +141,12 @@ def _looks_like_english(text: str) -> bool:
     return zh_chars == 0 or en_chars >= zh_chars
 
 
-def _has_multimodal_media(media: dict) -> bool:
-    return bool(
-        media.get("ref_image_urls")
-        or media.get("reference_video_urls")
-        or media.get("reference_audio_urls")
+def _segment_has_media_reference(segment: dict) -> bool:
+    description = " ".join(
+        str(segment.get(key) or "")
+        for key in ("description", "description_zh")
     )
+    return bool(MEDIA_REFERENCE_TAG_RE.search(description))
 
 
 def _enforce_seedance2_segment_modes(
@@ -161,16 +156,22 @@ def _enforce_seedance2_segment_modes(
     media: dict,
 ) -> list[ScriptSegment]:
     """确保分段模式符合 Seedance2 串行策略。"""
-    use_multimodal = mode == "multimodal_reference" or _has_multimodal_media(media)
     normalized: list[ScriptSegment] = []
     for idx, segment in enumerate(segments):
         updated = dict(segment)
-        if use_multimodal:
+        old_mode = updated.get("mode")
+        if _segment_has_media_reference(updated):
             updated["mode"] = "multimodal_reference"
         elif idx == 0:
             updated["mode"] = "text_to_video"
         else:
             updated["mode"] = "first_frame"
+        if old_mode != updated["mode"]:
+            logger.info(
+                "enforce_seedance2_segment_modes segment %d: %s -> %s (has_ref=%s)",
+                idx + 1, old_mode, updated["mode"],
+                _segment_has_media_reference(updated),
+            )
         normalized.append(updated)
     return normalized
 
@@ -198,10 +199,10 @@ async def _prepare_segment_for_submission(
             desc = _fix_dialogue_quotes(desc)
 
     if not _looks_like_english(desc):
-        source = desc_zh or desc
+        source = desc or desc_zh
         if source:
             desc = await translate_to_english(source)
-            if language == "zh" and not desc_zh:
+            if not desc_zh:
                 desc_zh = source
 
     normalized["description"] = desc
@@ -211,17 +212,19 @@ async def _prepare_segment_for_submission(
 
 
 async def _attach_zh_translation(segment: ScriptSegment) -> ScriptSegment:
-    """用 flash 模型把英文分镜脚本翻译成中文，供前端审阅展示。"""
+    """补齐中文审阅文案，已有文案优先保留。"""
     from app.services.video_thread_service.video_graph.llm_utils import translate_to_zh
 
     normalized = dict(segment)
     desc = (normalized.get("description") or "").strip()
     fallback_zh = (normalized.get("description_zh") or "").strip()
 
+    if fallback_zh:
+        return normalized
     if desc:
         description_zh = await translate_to_zh(desc)
     else:
-        description_zh = fallback_zh
+        description_zh = ""
 
     if description_zh:
         normalized["description_zh"] = description_zh
@@ -233,6 +236,23 @@ async def _attach_zh_translations(segments: list[ScriptSegment]) -> list[ScriptS
     if not segments:
         return []
     return list(await asyncio.gather(*(_attach_zh_translation(seg) for seg in segments)))
+
+
+def _normalize_user_edited_segment(
+    segment: ScriptSegment,
+    *,
+    language: str,
+) -> ScriptSegment:
+    """把前端可见的编辑字段转换为后端双语字段。"""
+    normalized = dict(segment)
+    description = str(normalized.get("description") or "").strip()
+    description_zh = str(normalized.get("description_zh") or "").strip()
+
+    if description and (language == "zh" or not _looks_like_english(description)):
+        normalized["description_zh"] = description
+    elif description_zh and "description" not in normalized:
+        normalized["description"] = description_zh
+    return normalized
 
 
 # ──────────────────────────────────────────────
@@ -254,7 +274,7 @@ async def plan_script(state: VideoGenerationState) -> dict[str, Any]:
 
     trend = state.get("trend", {})
     brand = state.get("brand", {})
-    product = state.get("product", {})
+    product_for_prompt = state.get("product_for_prompt") or state.get("product", {})
     user_input = state.get("user_input", "")
     config = state.get("parsed_config", DEFAULT_CONFIG)
     mode = state.get("parsed_mode", "text_to_video")
@@ -267,7 +287,7 @@ async def plan_script(state: VideoGenerationState) -> dict[str, Any]:
         result = await call_script_planner(
             trend=trend,
             brand=brand,
-            product=product,
+            product_for_prompt=product_for_prompt,
             user_input=user_input,
             mode=mode,
             media=media,
@@ -417,6 +437,8 @@ def route_human_action(state: VideoGenerationState) -> str:
 # ──────────────────────────────────────────────
 async def apply_edit(state: VideoGenerationState) -> dict[str, Any]:
     """用户手动修改了部分 segment，直接替换。"""
+    from app.services.video_thread_service.video_graph.view_state import format_segments_for_view
+
     thread_id = state.get("thread_id", "")
     await publish_event(thread_id, "progress", {
         "progress": 62,
@@ -425,14 +447,27 @@ async def apply_edit(state: VideoGenerationState) -> dict[str, Any]:
     })
 
     edited = state.get("human_edited_segments")
+    logger.info(
+        "apply_edit: 收到 %d 条编辑, segment_ids=%s",
+        len(edited) if edited else 0,
+        [s.get("segment_id") for s in (edited or [])],
+    )
     if not edited:
+        logger.warning("apply_edit: edited_segments 为空, 跳过编辑")
+        await publish_event(thread_id, "warning", {
+            "message": "未收到编辑内容，请检查请求参数",
+        })
         return {"current_step": "waiting_human"}
-
+    logger.info(f"编辑后的内容:{edited}")
     current_segments = list(state.get("script_segments", []))
-    edited_map = {s["segment_id"]: s for s in edited if "segment_id" in s}
     config = state.get("parsed_config", DEFAULT_CONFIG)
     generate_audio = config.get("generate_audio", True)
     language = config.get("language", "zh")
+    edited_map = {
+        s["segment_id"]: _normalize_user_edited_segment(s, language=language)
+        for s in edited
+        if "segment_id" in s
+    }
     for i, seg in enumerate(current_segments):
         sid = seg.get("segment_id")
         if sid in edited_map:
@@ -468,6 +503,14 @@ async def apply_edit(state: VideoGenerationState) -> dict[str, Any]:
         return {"current_step": "error", "error": f"编辑后剧本中文翻译失败: {e}"}
 
     total_dur = sum(s.get("duration", 5) for s in current_segments)
+
+    await publish_event(thread_id, "segments_updated", {
+        "message": "编辑已应用",
+        "step": "apply_edit_done",
+        "segments": format_segments_for_view(current_segments, language),
+        "total_duration": total_dur,
+    })
+
     return {
         "script_segments": current_segments,
         "total_duration": total_dur,
@@ -508,6 +551,7 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
             trend=state.get("trend", {}),
             brand=state.get("brand", {}),
             product=state.get("product", {}),
+            media=state.get("parsed_media", {}),
             language=language,
             generate_audio=generate_audio,
         )
@@ -565,25 +609,14 @@ def _as_str_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
-def _shift_image_reference_labels(prompt: str, offset: int = 1) -> str:
-    """多模态续段插入上一段尾帧后，将原有 [图n] 引用整体后移。"""
-    if not prompt or offset == 0:
-        return prompt
-    return re.sub(
-        r"\[图(\d+)\]",
-        lambda match: f"[图{int(match.group(1)) + offset}]",
-        prompt,
-    )
-
-
 def _build_multimodal_prompt(prompt: str, *, has_continuity_frame: bool) -> str:
     if not has_continuity_frame:
         return prompt
-    shifted = _shift_image_reference_labels(prompt)
     return (
-        "Use [图1] as the continuity first-frame reference inherited from the previous segment's last frame; "
+        "The first frame of this video segment MUST match the last reference image "
+        "(inherited from the previous segment's last frame); "
         "keep the same character, product placement, lighting, and visual style. "
-        f"{shifted}"
+        f"{prompt}"
     )
 
 
@@ -592,7 +625,7 @@ def build_payload_for_segment(
     config: dict,
     media: dict | None = None,
     *,
-    first_frame_url: str = "",
+    continuity_image_url: str = "",
 ):
     """将单个脚本片段包装成 Seedance 2.0 请求对象。"""
     from app.schemas.seedance2 import Seedance2VideoRequest
@@ -631,9 +664,9 @@ def build_payload_for_segment(
         reference_audio = _as_str_list(
             segment.get("reference_audio_urls") or media.get("reference_audio_urls")
         )
-        has_continuity_frame = bool(first_frame_url)
+        has_continuity_frame = bool(continuity_image_url)
         reference_images = (
-            [first_frame_url, *base_images][:9]
+            [*base_images, continuity_image_url][:9]
             if has_continuity_frame
             else base_images[:9]
         )
@@ -652,12 +685,15 @@ def build_payload_for_segment(
         )
 
     if mode == "first_frame":
-        frame_url = first_frame_url or segment.get("first_frame_url") or ""
-        if not frame_url:
-            raise ValueError("first_frame 模式缺少 first_frame_url")
+        if not continuity_image_url:
+            raise ValueError("first_frame 模式缺少延续参考图")
+        common["prompt"] = _build_multimodal_prompt(
+            prompt,
+            has_continuity_frame=True,
+        )
         return Seedance2VideoRequest(
-            mode="first_frame",
-            first_frame_url=frame_url,
+            mode="multimodal_reference",
+            reference_image_urls=[continuity_image_url],
             **common,
         )
 

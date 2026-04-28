@@ -44,14 +44,15 @@ class MediaAssetsInput(BaseModel):
         default_factory=list,
         description="参考音频 URL 列表；multimodal_reference 时最多 3 段，且不能作为唯一参考素材",
     )
-    first_frame_url: Optional[AnyHttpUrl] = Field(
-        default=None,
-        description="兼容字段：首帧图 URL；提交 Seedance2 时会作为参考图使用",
-    )
-    last_frame_url: Optional[AnyHttpUrl] = Field(
-        default=None,
-        description="兼容字段：尾帧图 URL；当前 Seedance2 多段链路不直接使用",
-    )
+
+
+class ProductForPrompt(BaseModel):
+    """传给 LLM 剧情规划的最小商品上下文。"""
+
+    name: str = Field(..., description="用于 prompt 的商品或规格名称")
+    description: str = Field(..., description="用于 prompt 的商品描述")
+    price: float = Field(..., description="用于 prompt 的商品或规格价格")
+    image_url: str = Field(default="", description="用于 prompt 的商品或规格参考图 URL")
 
 
 class CreateThreadRequest(BaseModel):
@@ -63,7 +64,7 @@ class CreateThreadRequest(BaseModel):
     media_assets: Optional[MediaAssetsInput] = Field(
         default=None,
         description=(
-            "可选。媒体素材：ref_image_urls 为参考图；first_frame_url / last_frame_url 用于首尾帧。"
+            "可选。媒体素材统一使用 ref_image_urls 传图；首帧、尾帧、参考图身份由提示词中的图序说明。"
             "完整示例见 MediaAssetsInput 的 Schema example。"
         ),
     )

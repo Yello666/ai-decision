@@ -36,7 +36,7 @@ router = APIRouter(prefix="/hotspot", tags=["hotspot"])
 
 # /recommend 固定与全量热点缓存同源：当前仅 YouTube；匹配模型与 /match 默认一致。
 _RECOMMEND_PLATFORMS: list[str] = ["youtube"]
-_RECOMMEND_LLM_MODEL = HotspotLLMModel.qwen_36_plus
+_RECOMMEND_LLM_MODEL = HotspotLLMModel.qwen_35_plus
 
 
 @router.post("/hot-trends", response_model=PaginatedTrendResponse, summary="获取热点数据（分页）")

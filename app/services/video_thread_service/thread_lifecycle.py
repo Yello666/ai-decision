@@ -18,6 +18,7 @@ from app.schemas.video_thread import (
     ConfigParamsInput,
     CreateThreadRequest,
     MediaAssetsInput,
+    ProductForPrompt,
     ResumeThreadRequest,
     ThreadHistoryResponse,
     ThreadHistoryTurn,
@@ -94,8 +95,7 @@ def _pick_thumbnail(
 
     优先级：
       1. 商品主图 ``product.image_url``（最贴合"这个 thread 在讲什么")；
-      2. 媒体素材首帧 ``media_assets.first_frame_url``；
-      3. 首张参考图 ``media_assets.ref_image_urls[0]``。
+      2. 首张参考图 ``media_assets.ref_image_urls[0]``。
     都没有则返回 None（前端自行兜底占位图）。
     """
     if product:
@@ -103,15 +103,44 @@ def _pick_thumbnail(
         if img:
             return img
     if media_assets:
-        first = (media_assets.get("first_frame_url") or "").strip()
-        if first:
-            return first
         refs = media_assets.get("ref_image_urls") or []
         if refs:
             first_ref = str(refs[0]).strip()
             if first_ref:
                 return first_ref
     return None
+
+
+def _build_product_for_prompt(payload: CreateThreadRequest) -> ProductForPrompt:
+    """将商品/规格选择压缩成 LLM 剧情规划所需的最小上下文。"""
+    selected_variant = payload.product.variants[0] if payload.product.variants else None
+    if selected_variant is None:
+        return ProductForPrompt(
+            name=payload.product.name,
+            description=payload.product.description,
+            price=payload.product.price,
+            image_url=payload.product.image_url,
+        )
+
+    return ProductForPrompt(
+        name=selected_variant.name,
+        description=payload.product.description,
+        price=selected_variant.price,
+        image_url=selected_variant.image_url or payload.product.image_url,
+    )
+
+
+def _merge_product_image_into_media(media_assets: Optional[dict], product_for_prompt: dict) -> dict:
+    """商品图作为 [image1]，用户上传参考图顺延，保证标签与 payload 顺序一致。"""
+    media = dict(media_assets or {})
+    refs = [str(url).strip() for url in media.get("ref_image_urls", []) if str(url).strip()]
+    product_image = str(product_for_prompt.get("image_url") or "").strip()
+    if product_image and product_image not in refs:
+        refs = [product_image, *refs]
+    media["ref_image_urls"] = refs
+    media["reference_video_urls"] = media.get("reference_video_urls") or []
+    media["reference_audio_urls"] = media.get("reference_audio_urls") or []
+    return media
 
 
 def _db_insert_thread(
@@ -351,18 +380,16 @@ def _build_param_patch(
             }
 
     if media_assets is not None:
-        media = media_assets.model_dump(mode="json", exclude_none=True)
+        media = _merge_product_image_into_media(
+            media_assets.model_dump(mode="json", exclude_none=True),
+            current_state.get("product_for_prompt") or {},
+        )
         ref_image_urls = list(media.get("ref_image_urls") or [])
-        first_frame_url = media.get("first_frame_url") or ""
-        if first_frame_url:
-            ref_image_urls = [first_frame_url, *ref_image_urls]
         patch["media_assets"] = media
         patch["parsed_media"] = {
             "ref_image_urls": ref_image_urls,
             "reference_video_urls": media.get("reference_video_urls") or [],
             "reference_audio_urls": media.get("reference_audio_urls") or [],
-            "first_frame_url": first_frame_url,
-            "last_frame_url": media.get("last_frame_url") or "",
         }
         if (
             patch["parsed_media"]["ref_image_urls"]
@@ -390,15 +417,10 @@ def _build_param_patch(
         if not effective_media:
             fallback = current_state.get("media_assets") or {}
             ref_image_urls = list(fallback.get("ref_image_urls") or [])
-            first_frame_url = fallback.get("first_frame_url") or ""
-            if first_frame_url:
-                ref_image_urls = [first_frame_url, *ref_image_urls]
             effective_media = {
                 "ref_image_urls": ref_image_urls,
                 "reference_video_urls": fallback.get("reference_video_urls") or [],
                 "reference_audio_urls": fallback.get("reference_audio_urls") or [],
-                "first_frame_url": first_frame_url,
-                "last_frame_url": fallback.get("last_frame_url") or "",
             }
         has_image_or_video = bool(
             effective_media.get("ref_image_urls")
@@ -482,14 +504,21 @@ async def _run_graph_in_background(
 async def create_thread_task(payload: CreateThreadRequest, merchant: Merchant) -> dict:
     # 1.初始化thread_id和state
     thread_id = str(uuid.uuid4())
+    product = payload.product.model_dump(mode="json")
+    product_for_prompt = _build_product_for_prompt(payload).model_dump(mode="json")
+    media_assets = _merge_product_image_into_media(
+        payload.media_assets.model_dump(mode="json") if payload.media_assets else None,
+        product_for_prompt,
+    )
     initial_state: dict = {
         "thread_id": thread_id,
         "user_input": payload.user_input,
         "trend": payload.trend.model_dump(mode="json"),
         "brand": payload.brand.model_dump(mode="json") if payload.brand else {},
-        "product": payload.product.model_dump(mode="json"),
+        "product": product,
+        "product_for_prompt": product_for_prompt,
         "generation_mode": payload.generation_mode,
-        "media_assets": payload.media_assets.model_dump(mode="json") if payload.media_assets else {},
+        "media_assets": media_assets,
         "config_params": payload.config_params.model_dump(mode="json") if payload.config_params else {},
         "shopify_store_id": merchant.shopify_store_id,
         "revision_count": 0, #视频脚本最大修改轮次（10次，超过这个次数，将提示用户已达最大上下文？让用户直接编辑然后执行）
@@ -498,10 +527,8 @@ async def create_thread_task(payload: CreateThreadRequest, merchant: Merchant) -
 
     # 创建时确定列表页缩略图：商品主图 > 首帧 > 首张参考图
     thumbnail = _pick_thumbnail(
-        product=payload.product.model_dump(mode="json"),
-        media_assets=(
-            payload.media_assets.model_dump(mode="json") if payload.media_assets else None
-        ),
+        product=product,
+        media_assets=media_assets,
     )
 
     # 立即写 video_threads 索引行，作为列表查询的权威数据源与归属校验依据

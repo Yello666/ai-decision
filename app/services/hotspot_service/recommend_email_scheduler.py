@@ -26,7 +26,7 @@ from app.services.hotspot_service.recommended_hotspots import build_recommended_
 logger = logging.getLogger(__name__)
 
 _RECOMMEND_PLATFORMS: list[str] = ["youtube"]
-_RECOMMEND_LLM_MODEL = HotspotLLMModel.qwen_36_plus
+_RECOMMEND_LLM_MODEL = HotspotLLMModel.qwen_35_plus
 _JOB_ID = "scheduled_hotspot_recommend_email"
 """
 定时推荐邮件流程（简述）：

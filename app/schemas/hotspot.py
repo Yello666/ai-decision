@@ -116,7 +116,7 @@ class RecommendationLevel(str, Enum):
 
 
 class HotspotLLMModel(str, Enum):
-    qwen_36_plus = "qwen3.6-plus"
+    qwen_35_plus = "qwen3.6-plus"
     qwen_36_flash = "qwen3.6-flash-2026-04-16"
 
 
@@ -147,7 +147,7 @@ class HotspotBatchMatchRequest(BaseModel):
 
     trends: List[TrendObject] = Field(..., description="待分析的热点列表")
     llm_model: HotspotLLMModel = Field(
-        default=HotspotLLMModel.qwen_36_plus,
+        default=HotspotLLMModel.qwen_35_plus,
         description="匹配分析使用的大模型：qwen3.6-plus 或 qwen3.6-flash",
     )
 

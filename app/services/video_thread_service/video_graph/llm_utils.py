@@ -26,6 +26,37 @@ LLM_MAX_RETRIES = 2
 PLANNER_MAX_TOKENS = 4000
 REVISER_MAX_TOKENS = 4000
 TRANSLATE_MAX_TOKENS = 1000
+MEDIA_REFERENCE_TAG_RE = re.compile(r"\[(?:image|video|audio|图|视频|音频)\d+\]", re.IGNORECASE)
+
+
+def _as_str_list(value: Any) -> list[str]:
+    if not value:
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _format_available_media_references(
+    media: dict[str, Any],
+    product: dict[str, Any] | None = None,
+) -> str:
+    """把可用素材转换成 LLM 必须引用的稳定标签清单。
+
+    仅向 LLM 暴露稳定标签与语义说明，URL 由后续真实生成时再注入，避免长 URL 浪费 token。
+    """
+    lines: list[str] = []
+    product = product or {}
+    product_image_url = str(product.get("image_url") or "").strip()
+    product_name = str(product.get("name") or "the product").strip()
+    for idx, url in enumerate(_as_str_list(media.get("ref_image_urls")), start=1):
+        if product_image_url and url == product_image_url:
+            lines.append(f"- [image{idx}]: product reference image for {product_name}")
+        else:
+            lines.append(f"- [image{idx}]: user-provided reference image")
+    for idx, _url in enumerate(_as_str_list(media.get("reference_video_urls")), start=1):
+        lines.append(f"- [video{idx}]: user-provided reference video")
+    for idx, _url in enumerate(_as_str_list(media.get("reference_audio_urls")), start=1):
+        lines.append(f"- [audio{idx}]: user-provided reference audio")
+    return "\n".join(lines) if lines else "(none)"
 
 
 def _get_llm_client() -> AsyncOpenAI:
@@ -67,39 +98,61 @@ def _extract_json(text: str) -> dict:
     raise ValueError(f"无法从 LLM 输出中提取有效 JSON: {text[:200]}")
 
 
+def _normalize_segment_mode(seg: dict[str, Any], index: int) -> str:
+    """按单段 prompt 是否显式引用参考素材，确定实际生成模式。"""
+    description = str(seg.get("description") or "")
+    if MEDIA_REFERENCE_TAG_RE.search(description):
+        return "multimodal_reference"
+    if index == 0:
+        return "text_to_video"
+    return "first_frame"
+
+
+def _inject_missing_product_refs(
+    segments: list[dict],
+    media: dict,
+    product: dict,
+) -> list[dict]:
+    """如果有产品参考图但 LLM 完全没引用，自动注入 [image1] 标签。"""
+    product_image = (product.get("image_url") or "").strip()
+    ref_images = media.get("ref_image_urls") or []
+    if not product_image or product_image not in ref_images:
+        return segments
+
+    any_has_ref = any(
+        MEDIA_REFERENCE_TAG_RE.search(s.get("description", ""))
+        for s in segments
+    )
+    if any_has_ref:
+        return segments
+
+    product_name = product.get("name", "the product")
+    for seg in segments:
+        desc = seg.get("description", "")
+        seg["description"] = (
+            f"{desc} The product shown is [image1] ({product_name}), "
+            f"matching the exact appearance of [image1]."
+        )
+    logger.warning(
+        "LLM 未嵌入任何媒体标签，已自动为 %d 个 segment 注入 [image1]",
+        len(segments),
+    )
+    return segments
+
+
 # ──────────────────────────────────────────────
 # 剧情规划（节点 B）
 # ──────────────────────────────────────────────
+#第一段，如果没有参考音频，就是文字生视频。其他段如果没有用户没有说xx参考什么什么，就是首帧生成。
+# 如果有参考图就是多模态生成（因为既要首帧生成），又要参考图生成。现在全部都是多模态生成。
 PLANNER_SYSTEM_PROMPT = """\
-You are a senior direct-response video strategist, storyboard director, and Seedance 2.0 prompt engineer.
-Your task: combine the trend/hotspot, product facts, brand tone, and the user's idea into a segmented marketing video script optimized for Seedance 2.0.
+## ROLE
+You are a senior direct-response video strategist and Seedance 2.0 prompt engineer. Your task is to generate a multi-segment marketing video script that follows a strict technical execution logic based on the user's Default Mode.
 
 ## MARKETING STRATEGY
 - Build the story around the hotspot/trend, but make the product the emotional or practical payoff.
 - Use the brand tone and product benefits as constraints, not as a separate ad read.
 - Open with a visual hook in segment 1, escalate through clear product use or transformation, and end with a memorable product/brand beat.
-- Keep every segment self-contained enough for Seedance, while preserving character, product, scene, and style continuity across segments.
-
-## MODEL CONSTRAINTS (Seedance 2.0)
-- Duration per segment: integer in [4, 15] seconds.
-- Supported modes for this workflow:
-  - text_to_video: pure text generation.
-  - first_frame: use the previous segment's returned last frame as this segment's first frame.
-  - multimodal_reference: use reference images/videos/audio supplied by the user.
-- Supported media references in prompts:
-  - Images: [image1], [image2], ...
-  - Videos: [video1], [video2], ...
-  - Audio: [audio1], [audio2], ...
-- English prompts should stay under 1000 words.
-
-## PROMPT WRITING GUIDELINES (from Seedance official guide)
-- Be specific about: subject appearance, product appearance, action/motion, camera angle (close-up, wide shot, tracking, handheld, macro, etc.), lighting, atmosphere, and background.
-- Describe the temporal progression: what happens at the start vs. the end of the clip.
-- Avoid vague adjectives like "beautiful" or "nice". Use concrete, cinematic and product-specific language.
-- When generate_audio is true, dialogue MUST be wrapped in English double quotes.
-  Example: The man turns to the camera and says "Remember, never point at the moon."
-- Keep each segment's prompt focused on ONE scene/action. Complex stories → multiple segments.
-- For multimodal_reference, explicitly describe how each referenced asset is used, e.g. [image1] is the product appearance anchor, [video1] provides camera rhythm, [audio1] provides voice or music mood.
 
 ## SEGMENT STRUCTURE
 Each segment must include:
@@ -108,28 +161,61 @@ Each segment must include:
 - duration: int in [4, 15] seconds
 - mode: one of text_to_video, first_frame, multimodal_reference
 
-## CONTINUITY & EXECUTION STRATEGY
-- Always plan for sequential execution.
-- If Default Mode is text_to_video and no media references are available:
-  - segment 1 MUST use text_to_video.
-  - segment 2+ MUST use first_frame and continue from the previous segment's last frame.
-- If Default Mode is multimodal_reference or media references are available:
-  - ALL segments MUST use multimodal_reference.
-  - Each segment prompt MUST mention the relevant references with [图n]/[视频n]/[音频n] and explain their role.
-  - Segment 2+ should also continue visually from the previous segment's last frame; describe it as continuity from the prior shot.
+## USER INPUT (HIGH PRIORITY — MUST FOLLOW)
+The "[User Input]" field contains the user's creative brief, instructions, and constraints.
+- It may be in Chinese or English. Regardless of language, you MUST faithfully follow its intent.
+- If the user mentions media labels such as [图1], [图2], [视频1], [音频1], these are references to assets listed in "[Available Media References]". You MUST normalize them to English labels ([image1], [image2], [video1], [audio1]) and embed them in the corresponding segment descriptions.
+  Example: User says "[图1] 是我的吸尘器" → you MUST use [image1] in every segment that shows the product.
+- If the user describes how specific assets should be used, follow those instructions precisely.
 
+## MEDIA REFERENCE RULES (HIGHEST PRIORITY — READ FIRST)
+- The user message includes a "[Available Media References]" block with English labels: [image1], [image2], [video1], [audio1], etc.
+- The user idea may instead use Chinese variants. They refer to the SAME asset and you MUST normalize them to the English label in your output:
+  [图N] == [imageN]   [视频N] == [videoN]   [音频N] == [audioN]
+- HARD RULE 1 (PRODUCT IMAGE): If the references include a "product reference image" (typically [image1]), then BY DEFAULT every segment MUST embed [image1] inline in its description. The ONLY exception is a segment that intentionally does NOT show the product (e.g., a pure mood/atmosphere shot or a setup scene before the product reveal). Mentioning only the product name without [image1] is ALWAYS forbidden when [image1] exists.
+  - Bad:  "the vacuum cleaner on the counter"
+  - Good: "the [image1] vacuum cleaner on the counter, matching the exact appearance of [image1]"
+- HARD RULE 2: If the user idea explicitly references an asset (e.g., "[图1] 是我的吸尘器"), the corresponding English label ([image1]) MUST appear in at least one segment description.
+- HARD RULE 3: A segment's description may also reference [video1]/[audio1] when those assets are needed; otherwise omit them.
 
-## OUTPUT FORMAT (strict JSON)
+## CORE EXECUTION LOGIC (apply AFTER following the rules above)
+Determine each segment's mode in this strict order:
+1) If the segment's description contains ANY reference label ([imageN], [videoN], or [audioN]) → mode = "multimodal_reference".
+2) Else if it is segment 1 → mode = "text_to_video".
+3) Else (segment 2+) → mode = "first_frame" (inherits the last frame of the previous clip for visual continuity).
+This means: whenever a reference asset is available and the segment visually depicts it, you MUST embed the label AND set mode to "multimodal_reference" — regardless of segment position.
+
+The user-provided default_mode is only a hint for segment 1 when no reference asset is needed:
+- default_mode = text_to_video → segment 1 has no labels and uses text_to_video; later segments default to first_frame unless they embed labels.
+- default_mode = multimodal_reference → prefer embedding labels and using multimodal_reference whenever it makes the visual stronger.
+
+Constraints: Duration per segment must be in [4, 15] seconds. Total English prompts must be under 1000 words.
+
+## PROMPT WRITING RULES
+- Specificity: Detail the subject appearance, product appearance, motion, camera angle (close-up, tracking, handheld, macro, etc.), lighting, and background.
+- Temporal Progression: Describe what happens at the start vs. the end of the clip.
+- Language: Use concrete, cinematic language. Avoid vague adjectives like beautiful.
+- Audio: Dialogue must be wrapped in English double quotes. Example: The man turns to the camera and says "Remember the plan."
+- Continuity: Each segment must focus on ONE action. For first_frame mode, briefly restate the subject to maintain consistency.
+
+## OUTPUT FORMAT (Strict JSON)
+The output must be a single JSON object. Whenever a referenced asset is depicted, embed its English label inline (see example).
 {
   "optimized_prompt": "A single English paragraph summarizing the overall video concept.",
   "segments": [
     {
       "segment_id": 1,
-      "description": "Detailed English prompt with camera angles, lighting, motion...",
+      "description": "Cinematic close-up of a sunlit kitchen counter with the [image1] vacuum cleaner prominently placed, matching the exact shape and color of [image1] ...",
+      "duration": 6,
+      "mode": "multimodal_reference"
+    },
+    {
+      "segment_id": 2,
+      "description": "Medium shot, the [image1] vacuum cleaner sliding across the floor, matching the exact silhouette and color of [image1] ...",
       "duration": 8,
-      "mode": "text_to_video"
+      "mode": "multimodal_reference"
     }
-  ],
+  ]
 }
 """
 
@@ -138,7 +224,7 @@ async def call_script_planner(
     *,
     trend: dict,
     brand: dict,
-    product: dict,
+    product_for_prompt: dict,
     user_input: str,
     mode: str,
     media: dict,
@@ -150,30 +236,23 @@ async def call_script_planner(
 
     user_msg_parts = []
     user_msg_parts.append(f"[Trend] title: {trend.get('title', '')}, summary: {trend.get('summary', '')}, tags: {trend.get('tags', [])}")
-    user_msg_parts.append(f"[Brand] name: {brand.get('name', '')}, tone: {brand.get('tone', '')}, products: {brand.get('mainly_sold_products', brand.get('industry', ''))}")
+    user_msg_parts.append(f"[Brand] name: {brand.get('name', '')}, tone: {brand.get('tone', '')}")
     if brand.get("core_value"):
         user_msg_parts.append(f"[Brand Slogan] {brand['core_value']}")
-    # TODO 这里就算product带了variant，也不会读取variant的信息（应该不管是product还是variant，都只提取name、description、price这些信息，再传入，）
-    user_msg_parts.append(f"[Product] {product.get('name', '')}: {product.get('description', '')}, price: {product.get('price', '')}$")
-    # TODO 这里会主动传递product的url，没必要，建议删除，剧情规划不依赖图片
-    if product.get("image_url"):
-        user_msg_parts.append(f"[Product Image] {product['image_url']}")
-    user_msg_parts.append(f"[User Idea] {user_input or '(no specific idea, use your creativity)'}")
+    user_msg_parts.append(f"[Product] {product_for_prompt.get('name', '')}: {product_for_prompt.get('description', '')}, price: {product_for_prompt.get('price', '')}$")
+    user_msg_parts.append(
+        f"[Available Media References]\n{_format_available_media_references(media, product_for_prompt)}"
+    )
     user_msg_parts.append(f"[Default Mode] {mode}")
-    user_msg_parts.append(f"[Generate Audio] {generate_audio}")
-
-    if media.get("ref_image_urls"):
-        user_msg_parts.append(f"[Reference Images as 图1..图N] {media['ref_image_urls']}")
-    if media.get("reference_video_urls"):
-        user_msg_parts.append(f"[Reference Videos as 视频1..视频N] {media['reference_video_urls']}")
-    if media.get("reference_audio_urls"):
-        user_msg_parts.append(f"[Reference Audio as 音频1..音频N] {media['reference_audio_urls']}")
-
+    user_msg_parts.append(
+        f"[User Input — HIGH PRIORITY, follow strictly]\n"
+        f"{user_input or '(no specific idea, use your creativity)'}"
+    )
     user_msg = "\n".join(user_msg_parts)
 
     client = _get_llm_client()
     resp = await client.chat.completions.create(
-        model=settings.LLM_MODEL_36_PLUS,
+        model=settings.LLM_MODEL_35_PLUS,
         messages=[
             {"role": "system", "content": PLANNER_SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
@@ -193,21 +272,26 @@ async def call_script_planner(
     if not segments:
         raise ValueError("LLM 未返回任何剧本片段")
 
-    has_multimodal_refs = bool(
-        media.get("ref_image_urls")
-        or media.get("reference_video_urls")
-        or media.get("reference_audio_urls")
-        or mode == "multimodal_reference"
-    )
+    for i, seg in enumerate(segments):
+        logger.info(
+            "LLM 原始输出 segment %d: mode=%s, has_ref=%s, desc=%.120s",
+            i + 1,
+            seg.get("mode"),
+            bool(MEDIA_REFERENCE_TAG_RE.search(seg.get("description", ""))),
+            seg.get("description", ""),
+        )
+
+    segments = _inject_missing_product_refs(segments, media, product_for_prompt)
 
     for i, seg in enumerate(segments):
         seg.setdefault("segment_id", i + 1)
-        if has_multimodal_refs:
-            seg["mode"] = "multimodal_reference"
-        elif i == 0:
-            seg["mode"] = "text_to_video"
-        else:
-            seg["mode"] = "first_frame"
+        old_mode = seg.get("mode")
+        seg["mode"] = _normalize_segment_mode(seg, i)
+        if old_mode != seg["mode"]:
+            logger.info(
+                "normalize_segment_mode segment %d: %s -> %s",
+                i + 1, old_mode, seg["mode"],
+            )
         seg.setdefault("duration", 5)
         dur = seg["duration"]
         if not isinstance(dur, int) or dur == -1:
@@ -225,21 +309,28 @@ REVISER_SYSTEM_PROMPT = """\
 You are a senior storyboard director. The user has reviewed a video script and wants changes.
 Revise the script based on their feedback while preserving the overall brand/trend context.
 
-RULES:
+MEDIA REFERENCE RULES (HIGHEST PRIORITY):
+- The user message includes "[Available Media References]" with English labels: [image1], [video1], [audio1], etc.
+- Chinese variants from user feedback mean the same asset and MUST be normalized to the English label in your output:
+  [图N] == [imageN]   [视频N] == [videoN]   [音频N] == [audioN]
+- If references contain a "product reference image" (typically [image1]), EVERY segment that visually shows the product MUST embed [image1] in the description. Writing only the product name without [image1] is forbidden.
+- Do not remove existing media reference labels unless the user's feedback explicitly asks to stop using that asset.
+
+OTHER RULES:
 1. Each segment's duration MUST be an integer in [4, 15] seconds (Seedance 2.0 constraint).
 2. Keep segment_id numbering consistent.
 3. The English description is the actual prompt for the video generation model.
-4. When generate_audio is true, dialogue MUST be in double quotes.
+4. When generate_audio is true, dialogue MUST be wrapped in English double quotes.
 5. Preserve segments the user didn't mention — only modify what they asked to change.
 6. English prompts ≤ 1000 words.
-7. Valid modes are text_to_video, first_frame, multimodal_reference. Preserve the existing mode strategy unless the user explicitly asks otherwise.
+7. Valid modes are text_to_video, first_frame, multimodal_reference. A segment whose description contains ANY reference label MUST use mode "multimodal_reference"; otherwise keep the existing mode (text_to_video for segment 1, first_frame for segment 2+).
 
 OUTPUT FORMAT (strict JSON):
 {
   "segments": [
     {
       "segment_id": 1,
-      "description": "English prompt with camera angles, lighting, motion...",
+      "description": "English prompt with camera angles, lighting, motion. If the product is on screen, include [image1] inline.",
       "duration": 8,
       "mode": "text_to_video"
     }
@@ -278,6 +369,7 @@ async def call_script_reviser(
     trend: dict,
     brand: dict,
     product: dict,
+    media: dict,
     language: str,
     generate_audio: bool,
 ) -> dict[str, Any]:
@@ -290,12 +382,13 @@ async def call_script_reviser(
         f"[User Feedback] {feedback}\n\n"
         f"[Context] Trend: {trend.get('title', '')}, Brand: {brand.get('name', '')} ({brand.get('tone', '')}), "
         f"Product: {product.get('name', '')}\n"
+        f"[Available Media References]\n{_format_available_media_references(media, product)}\n\n"
         f"[Generate Audio] {generate_audio}"
     )
 
     client = _get_llm_client()
     resp = await client.chat.completions.create(
-        model=settings.LLM_MODEL_36_PLUS,
+        model=settings.LLM_MODEL_35_PLUS,
         messages=[
             {"role": "system", "content": REVISER_SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
@@ -321,7 +414,7 @@ async def translate_to_english(text: str) -> str:
     settings = get_settings()
     client = _get_llm_client()
     resp = await client.chat.completions.create(
-        model=settings.LLM_MODEL_36_PLUS,
+        model=settings.LLM_MODEL_36_FLASH,
         messages=[
             {"role": "system", "content": TRANSLATE_SYSTEM_PROMPT},
             {"role": "user", "content": src},

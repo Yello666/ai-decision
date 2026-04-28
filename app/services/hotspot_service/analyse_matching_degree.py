@@ -39,7 +39,7 @@ ASYNC_LLM_CLIENT = AsyncOpenAI(
     api_key=settings.LLM_API_KEY,
     http_client=httpx.AsyncClient(proxy=None),
 )
-DEFAULT_LLM_MODEL = HotspotLLMModel.qwen_36_plus
+DEFAULT_LLM_MODEL = HotspotLLMModel.qwen_35_plus
 MATCH_BATCH_SIZE = 10
 
 # --------------------------

@@ -54,8 +54,8 @@ async def process_video_task_callback(payload: VideoTaskCallbackRequest, db: Ses
     )
 
     if status == "succeeded":
-        last_frame_url = payload.content.last_frame_url if payload.content and payload.content.last_frame_url else ""
-        await continue_sequential_chain(db, task_id, last_frame_url)
+        continuity_image_url = payload.content.last_frame_url if payload.content and payload.content.last_frame_url else ""
+        await continue_sequential_chain(db, task_id, continuity_image_url)
 
     logger.info("回调处理完成: task_id=%s, generation_id=%s, status=%s", task_id, gen.id, gen.status)
     return {"received": True, "matched": True, "generation_id": gen.id}
@@ -130,7 +130,24 @@ def handle_video_task_callback(
 
 
 
-async def continue_sequential_chain(db: Session, completed_task_id: str, last_frame_url: str) -> None:
+async def _update_task_results_in_graph(thread_id: str, new_result: dict) -> None:
+    """将新的 task_result 追加到 graph state，便于查询时看到所有段的 task_id。"""
+    try:
+        from app.services.video_thread_service.video_graph.graph import get_graph
+
+        graph = get_graph()
+        config = {"configurable": {"thread_id": thread_id}}
+        snapshot = await graph.aget_state(config)
+        current_results = list((snapshot.values or {}).get("task_results", []))
+        current_results.append(new_result)
+        await graph.aupdate_state(config, {"task_results": current_results})
+    except Exception:
+        logger.warning("更新 graph state task_results 失败: thread_id=%s", thread_id)
+
+
+async def continue_sequential_chain(db: Session, completed_task_id: str, continuity_image_url: str) -> None:
+    from app.services.video_thread_service.video_graph.event_bus import publish_event
+
     redis_client = get_redis_client()
     chain_key = f"seq_chain:{completed_task_id}"
     chain_raw = await redis_client.get(chain_key)
@@ -139,16 +156,15 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, last_fr
 
     chain_data = json.loads(chain_raw)
     remaining = chain_data.get("remaining_segments", [])
+    thread_id = chain_data.get("thread_id", "")
     if not remaining:
         await redis_client.delete(chain_key)
         return
     await redis_client.delete(chain_key)
 
     next_seg = dict(remaining[0])
-    if next_seg.get("mode") == "first_frame" and last_frame_url:
-        next_seg["first_frame_url"] = last_frame_url
-    elif next_seg.get("mode") == "first_frame" and not next_seg.get("first_frame_url"):
-        logger.warning("串行续传: first_frame 缺少 first_frame_url, segment=%s", next_seg.get("segment_id"))
+    if next_seg.get("mode") == "first_frame" and not continuity_image_url:
+        logger.warning("串行续传: first_frame 缺少延续参考图, segment=%s", next_seg.get("segment_id"))
 
     try:
         from app.services.video_thread_service.video_graph.nodes import (
@@ -160,22 +176,28 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, last_fr
             next_seg,
             chain_data.get("config", {}),
             chain_data.get("media", {}),
-            first_frame_url=last_frame_url,
+            continuity_image_url=continuity_image_url,
         )
         result = await create_seedance_video_task(payload)
         new_task_id = result.get("id", "")
         if not new_task_id:
             logger.error("串行续传提交未返回 task_id: segment=%s", next_seg.get("segment_id"))
+            await publish_event(thread_id, "error", {
+                "message": f"串行续传 segment {next_seg.get('segment_id')} 提交未返回 task_id",
+            })
             return
     except Exception:
         logger.exception("串行续传提交失败: segment=%s", next_seg.get("segment_id"))
+        await publish_event(thread_id, "error", {
+            "message": f"串行续传 segment {next_seg.get('segment_id')} 提交失败",
+        })
         return
 
     gen = Generation(
         shopify_store_id=chain_data.get("store_id", ""),
         type="video",
         status="queued",
-        thread_id=chain_data.get("thread_id") or None,
+        thread_id=thread_id or None,
         prompt_used=next_seg.get("description", ""),
         trend_snapshot=chain_data.get("trend"),
         brand_snapshot=chain_data.get("brand"),
@@ -191,6 +213,23 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, last_fr
         new_task_id,
         gen.id,
     )
+
+    new_task_result = {
+        "segment_id": next_seg.get("segment_id"),
+        "task_id": new_task_id,
+        "generation_id": gen.id,
+        "status": "queued",
+        "prompt": next_seg.get("description", ""),
+    }
+
+    if thread_id:
+        await _update_task_results_in_graph(thread_id, new_task_result)
+        await publish_event(thread_id, "segment_submitted", {
+            "segment_id": next_seg.get("segment_id"),
+            "task_id": new_task_id,
+            "generation_id": gen.id,
+            "remaining": len(remaining) - 1,
+        })
 
     if len(remaining) > 1 and new_task_id:
         new_chain = {**chain_data, "remaining_segments": remaining[1:]}
