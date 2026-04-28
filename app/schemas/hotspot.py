@@ -115,11 +115,6 @@ class RecommendationLevel(str, Enum):
         return mapping.get(value, cls.no)
 
 
-class HotspotLLMModel(str, Enum):
-    qwen_35_plus = "qwen3.6-plus"
-    qwen_36_flash = "qwen3.6-flash-2026-04-16"
-
-
 class RecommendEmailScheduleMode(str, Enum):
     interval_from_now = "interval_from_now"
     daily_fixed = "daily_fixed"
@@ -143,13 +138,9 @@ class PaginatedTrendResponse(BaseModel):
 
 
 class HotspotBatchMatchRequest(BaseModel):
-    """批量热点匹配请求：品牌信息由服务端按当前登录商户从 DB 加载，无需前端传入。"""
+    """批量热点匹配请求：品牌信息由服务端按当前登录商户从 DB 加载，无需前端传入。匹配分析固定使用配置项 LLM_MODEL_36_PLUS。"""
 
     trends: List[TrendObject] = Field(..., description="待分析的热点列表")
-    llm_model: HotspotLLMModel = Field(
-        default=HotspotLLMModel.qwen_35_plus,
-        description="匹配分析使用的大模型：qwen3.6-plus 或 qwen3.6-flash",
-    )
 
 
 class HotspotMatchResponse(BaseModel):

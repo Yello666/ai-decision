@@ -11,8 +11,6 @@ from sqlalchemy.orm import Session
 from app.models import Hotspot
 from app.core.config import get_settings
 from app.schemas.hotspot import (
-    HotspotLLMModel,
-
     HotspotMatchResponse,
     TrendObject,
     BrandObject,
@@ -39,7 +37,6 @@ ASYNC_LLM_CLIENT = AsyncOpenAI(
     api_key=settings.LLM_API_KEY,
     http_client=httpx.AsyncClient(proxy=None),
 )
-DEFAULT_LLM_MODEL = HotspotLLMModel.qwen_35_plus
 MATCH_BATCH_SIZE = 10
 
 # --------------------------
@@ -48,7 +45,6 @@ MATCH_BATCH_SIZE = 10
 async def batch_match_hotspot_for_brand_async(
     trends: List[TrendObject],
     brand: BrandObject,
-    llm_model: HotspotLLMModel = DEFAULT_LLM_MODEL,
 ) -> List[HotspotMatchResponse]:
     """
     给定当前商户的品牌信息，对一批热点并行批量调用 LLM 做匹配度分析。
@@ -58,6 +54,8 @@ async def batch_match_hotspot_for_brand_async(
     """
     if not trends:
         return []
+
+    match_model = get_settings().LLM_MODEL_36_PLUS
 
     brand_fp, hit_map, miss_indices = await mget_match(brand, trends)
     logger.info(
@@ -76,7 +74,7 @@ async def batch_match_hotspot_for_brand_async(
                 _llm_match_single_brand_async(
                     brand=brand,
                     trends=[trends[i] for i in group],
-                    llm_model=llm_model,
+                    llm_model=match_model,
                 )
                 for group in batches_indices
             ],
@@ -105,7 +103,7 @@ async def batch_match_hotspot_for_brand_async(
 async def _llm_match_single_brand_async(
     brand: BrandObject,
     trends: List[TrendObject],
-    llm_model: HotspotLLMModel = DEFAULT_LLM_MODEL,
+    llm_model: str,
 ) -> List[Dict[str, Any]]:
     """
     单品牌 + 多热点批量匹配：品牌信息放在 system 消息中只写一次；
@@ -153,7 +151,7 @@ async def _llm_match_single_brand_async(
     user_prompt = f"【待评估热点列表】\n{json.dumps(items_data, ensure_ascii=False)}"
 
     response = await ASYNC_LLM_CLIENT.chat.completions.create(
-        model=llm_model.value,
+        model=llm_model,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},

@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     # LangGraph  checkpoint 清理策略
     # ------------------------------
     CHECKPOINT_SWEEP_ENABLED: bool = True
-    CHECKPOINT_TTL_DAYS: int = 14
+    CHECKPOINT_TTL_DAYS: int = 14   #保留14天的历史记录
     CHECKPOINT_SWEEP_INTERVAL_HOURS: int = 24
 
     # ------------------------------
@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
     JWT_REFRESH_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 480    #6小时登录才过期
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080  # 7天
 
     # ------------------------------
@@ -89,10 +89,13 @@ class Settings(BaseSettings):
     # ------------------------------
     # 热点缓存
     # ------------------------------
+    #热点逻辑缓存10分钟过期（直接用API抓取的热点）
     HOT_TRENDS_LOGICAL_TTL_SECONDS: int = 600
     PRELOADING_HOT_TRENDS: bool = False
+    #热点分析缓存7天过期（调用大模型对热点进行总结）
     HOT_TRENDS_ANALYSIS_CACHE_TTL_SECONDS: int = 7 * 24 * 3600
     HOT_TRENDS_ANALYSIS_VERSION: str = "v1"
+    #热点与品牌匹配度计算7天过期（调用大模型对热点和品牌进行匹配度计算）
     HOT_TRENDS_MATCH_CACHE_TTL_SECONDS: int = 7 * 24 * 3600
     HOT_TRENDS_MATCH_VERSION: str = "v1"
 
@@ -110,8 +113,9 @@ class Settings(BaseSettings):
     # ------------------------------
     # WebSocket 心跳
     # ------------------------------
-    WS_HEARTBEAT_INTERVAL_SECONDS: int = 30
-    WS_PONG_TIMEOUT_SECONDS: int = 75
+    # 每隔1分钟发一次心跳，如果超过一分半钟没有收到pong判定次数+1
+    WS_HEARTBEAT_INTERVAL_SECONDS: int = 60
+    WS_PONG_TIMEOUT_SECONDS: int = 150
 
     # ------------------------------
     # 跨域
@@ -125,11 +129,6 @@ class Settings(BaseSettings):
     SHOPIFY_API_SECRET: str
     SHOPIFY_API_VERSION: str = "2026-01"
     SHOPIFY_REDIRECT_URI: str
-
-    # ------------------------------
-    # 内部服务
-    # ------------------------------
-    AUTODL_SERVICE_URL: str = "http://localhost:8001/predict"
 
     # ------------------------------
     # 模型服务 API
@@ -147,7 +146,7 @@ class Settings(BaseSettings):
 
     TAVILY_API_KEY: str
     SERPAPI_API_KEY: Optional[str] = None
-
+    #竟品信息过期时间
     COMPETITOR_CACHE_TTL: int = 7200
 
     SEEDANCE2_API_KEY: str = "f3a44c8c-783c-492c-bf5d-1f6d3b671ac3"

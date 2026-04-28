@@ -13,7 +13,6 @@ from app.models import Merchant, MerchantHotspotRecommendEmailSchedule
 from app.schemas.hotspot import (
     BrandObject,
     HotspotBatchMatchRequest,
-    HotspotLLMModel,
     HotspotMatchResponse,
     HotspotRecommendEmailScheduleResponse,
     HotspotRecommendEmailScheduleStateResponse,
@@ -34,9 +33,8 @@ from app.services.merchant_service import get_brand_by_merchant_id
 
 router = APIRouter(prefix="/hotspot", tags=["hotspot"])
 
-# /recommend 固定与全量热点缓存同源：当前仅 YouTube；匹配模型与 /match 默认一致。
+# /recommend 固定与全量热点缓存同源：当前仅 YouTube；匹配模型与配置 LLM_MODEL_36_PLUS（/match 默认）一致。
 _RECOMMEND_PLATFORMS: list[str] = ["youtube"]
-_RECOMMEND_LLM_MODEL = HotspotLLMModel.qwen_35_plus
 
 
 @router.post("/hot-trends", response_model=PaginatedTrendResponse, summary="获取热点数据（分页）")
@@ -81,7 +79,7 @@ async def match_hotspot(
     批量热点匹配：
     - 需登录；品牌信息根据当前登录商户自动从数据库读取
     - 每个 (品牌, 热点) 组合只分析一次，命中缓存则复用
-    - 未命中的热点并行批量调用 LLM，Prompt 中品牌信息只写一次
+    - 未命中的热点并行批量调用 LLM（模型固定为配置项 LLM_MODEL_36_PLUS），Prompt 中品牌信息只写一次
     """
     brand_model = get_brand_by_merchant_id(db, current_merchant.id)
     if not brand_model:
@@ -99,7 +97,6 @@ async def match_hotspot(
         return await batch_match_hotspot_for_brand_async(
             trends=request.trends,
             brand=brand,
-            llm_model=request.llm_model,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"批量匹配失败：{str(e)}")
@@ -118,7 +115,7 @@ async def recommend_hotspots(
     """
     对热点全量缓存列表中全部热点做品牌匹配，剔除契合度低于 min_compatibility_score 的条目后返回。
     请求中的 min_compatibility_score 会与 Redis 中该商户已存值比较，不一致则写回 Redis。
-    平台固定为 YouTube，匹配模型固定为 qwen3.5-plus（与 /match 默认一致）。
+    平台固定为 YouTube；匹配分析固定使用配置项 LLM_MODEL_36_PLUS。
     """
     brand_model = get_brand_by_merchant_id(db, current_merchant.id)
     if not brand_model:
@@ -142,7 +139,6 @@ async def recommend_hotspots(
             platforms=_RECOMMEND_PLATFORMS,
             min_compatibility_score=request.min_compatibility_score,
             brand=brand,
-            llm_model=_RECOMMEND_LLM_MODEL,
         )
     except Exception as e:
         msg = str(e).replace("\n", " ").replace("\\n", " ").strip()

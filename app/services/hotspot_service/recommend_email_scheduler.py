@@ -18,7 +18,7 @@ from app.models import (
     MerchantHotspotRecommendEmailDelivery,
     MerchantHotspotRecommendEmailSchedule,
 )
-from app.schemas.hotspot import BrandObject, HotspotLLMModel, RecommendEmailScheduleMode, TrendObject
+from app.schemas.hotspot import BrandObject, RecommendEmailScheduleMode, TrendObject
 from app.services.hotspot_service.match_cache import brand_fingerprint, trend_fingerprint
 from app.services.hotspot_service.recommend_email import send_recommendation_email
 from app.services.hotspot_service.recommended_hotspots import build_recommended_hotspots
@@ -26,7 +26,6 @@ from app.services.hotspot_service.recommended_hotspots import build_recommended_
 logger = logging.getLogger(__name__)
 
 _RECOMMEND_PLATFORMS: list[str] = ["youtube"]
-_RECOMMEND_LLM_MODEL = HotspotLLMModel.qwen_35_plus
 _JOB_ID = "scheduled_hotspot_recommend_email"
 """
 定时推荐邮件流程（简述）：
@@ -181,7 +180,6 @@ async def _send_for_schedule(
         platforms=_RECOMMEND_PLATFORMS,
         min_compatibility_score=min_score,
         brand=brand_obj,
-        llm_model=_RECOMMEND_LLM_MODEL,
     )
     unsent_items, brand_fp, delivery_rows = _filter_unsent_items(
         db,

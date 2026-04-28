@@ -10,7 +10,6 @@ from app.core.hot_trends_cache import get_hot_trends_cached
 from app.schemas.hotspot import (
     BrandObject,
     CollectTrendObject,
-    HotspotLLMModel,
     HotspotMatchResponse,
     HotspotRecommendedItem,
     TrendObject,
@@ -37,7 +36,6 @@ async def build_recommended_hotspots(
     platforms: List[str],
     min_compatibility_score: float,
     brand: BrandObject,
-    llm_model: HotspotLLMModel,
 ) -> tuple[List[HotspotRecommendedItem], int]:
     """
     返回 (筛选后的推荐列表, 实际参与匹配的分析条数)。
@@ -57,7 +55,6 @@ async def build_recommended_hotspots(
     matches: List[HotspotMatchResponse] = await batch_match_hotspot_for_brand_async(
         trends=trends,
         brand=brand,
-        llm_model=llm_model,
     )
 
     if len(matches) != len(candidates):
