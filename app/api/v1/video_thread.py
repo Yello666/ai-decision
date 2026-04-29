@@ -7,7 +7,7 @@
   POST   /video-thread/{thread_id}/resume   注入 human 决策，恢复 Graph
   GET    /video-thread/{thread_id}/state    单次拉取前端视图态（降级兜底）
   GET    /video-thread/{thread_id}/history  回放对话过程（历次草稿 + 用户决策）
-  GET    /video-thread/{thread_id}/stream   SSE 实时事件流（细粒度进度 / human_action / done / error）
+  GET    /video-thread/{thread_id}/stream   SSE 实时事件流（可带 ?access_token=；亦兼容 Cookie / Bearer）
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_merchant
+from app.api.deps import get_current_merchant, get_current_merchant_sse
 from app.core.responses import success
 from app.db.mysql import get_db
 from app.models import Merchant
@@ -77,7 +77,7 @@ async def create_thread(
     """
     创建视频生成会话。本接口立刻返回 thread_id（<=50ms），
     客户端应随即：
-      1. 建立 SSE: GET /video-thread/{thread_id}/stream
+      1. 建立 SSE: GET /video-thread/{thread_id}/stream（可 ?access_token=<JWT>）
       2. 保底轮询: GET /video-thread/{thread_id}/state
     """
     data = await create_thread_task(payload, current_merchant)
@@ -147,12 +147,13 @@ async def get_thread_history(
 
 # ──────────────────────────────────────────────
 # GET /video-thread/{thread_id}/stream    （SSE）
+# 鉴权：Query access_token 优先；否则同 REST（Cookie / Authorization: Bearer）
 # ──────────────────────────────────────────────
 @router.get("/{thread_id}/stream")
 async def stream_thread_events(
     thread_id: str,
     request: Request,
-    current_merchant: Merchant = Depends(get_current_merchant),
+    current_merchant: Merchant = Depends(get_current_merchant_sse),
 ):
     return await stream_thread_events_response(thread_id, request, current_merchant)
 

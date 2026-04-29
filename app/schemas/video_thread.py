@@ -10,7 +10,7 @@ from app.schemas.product import ProductObject
 class ConfigParamsInput(BaseModel):
     # 设为 Optional + default=None，便于 partial update 时通过 exclude_none
     # 仅序列化用户显式传入的字段，避免默认值误覆盖已有 state。
-    resolution: Optional[Literal["480p", "720p"]] = None
+    resolution: Optional[Literal["480p", "720p","1080p"]] = None
     ratio: Optional[
         Literal["16:9", "9:16", "1:1", "3:4", "4:3", "21:9", "adaptive"]
     ] = None

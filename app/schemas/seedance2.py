@@ -155,9 +155,9 @@ class Seedance2VideoRequest(BaseModel):
         description="视频时长（秒），官方范围 4~15，-1 表示模型自主选择",
     )
 
-    resolution: Optional[Literal["480p", "720p"]] = Field(
+    resolution: Optional[Literal["480p", "720p","1080p"]] = Field(
         default="720p",
-        description="视频分辨率。枚举: 480p / 720p",
+        description="视频分辨率。枚举: 480p / 720p/1080p",
     )
 
     watermark: Optional[bool] = Field(

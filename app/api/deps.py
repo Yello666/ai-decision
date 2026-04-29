@@ -1,6 +1,6 @@
 from typing import Mapping, Optional
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Query, Request
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
 from sqlalchemy.orm import Session
@@ -33,15 +33,7 @@ def _extract_access_token(request: Request, bearer_token: Optional[str]) -> Opti
     return extract_access_token_from_cookies(request.cookies, bearer_token)
 
 
-def get_current_merchant(
-    request: Request,
-    bearer_token: Optional[str] = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
-):
-    token = _extract_access_token(request, bearer_token)
-    if not token:
-        raise HTTPException(status_code=401, detail="not_authenticated")
-
+def _merchant_from_access_token(db: Session, token: str):
     try:
         payload = decode_access_token(token)
         if payload.get("type") != "access":
@@ -58,3 +50,30 @@ def get_current_merchant(
     if not merchant.is_active:
         raise HTTPException(status_code=403, detail="merchant_inactive")
     return merchant
+
+
+def get_current_merchant(
+    request: Request,
+    bearer_token: Optional[str] = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+):
+    token = _extract_access_token(request, bearer_token)
+    if not token:
+        raise HTTPException(status_code=401, detail="not_authenticated")
+    return _merchant_from_access_token(db, token)
+
+
+def get_current_merchant_sse(
+    request: Request,
+    access_token: Optional[str] = Query(
+        default=None,
+        description="JWT；浏览器 EventSource 无法设 Authorization 时可用（亦兼容 Cookie / Bearer）",
+    ),
+    bearer_token: Optional[str] = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+):
+    """SSE 流专用：优先使用 Query ``access_token``，否则与 :func:`get_current_merchant` 相同（Cookie / Bearer）。"""
+    token = access_token or _extract_access_token(request, bearer_token)
+    if not token:
+        raise HTTPException(status_code=401, detail="not_authenticated")
+    return _merchant_from_access_token(db, token)
