@@ -1,17 +1,14 @@
 from typing import Optional
 
-from fastapi import APIRouter,  Query, WebSocket
+from fastapi import APIRouter, Query, WebSocket
 
-from app.api.deps import extract_access_token_from_cookies
 from app.services.video_thread_service import handle_generation_status_ws
 router = APIRouter(prefix="/video-tasks", tags=["video-tasks"])
 # ----------------------------------------------------------
 # WebSocket — 实时推送视频生成状态变更到前端
-# ws(s)://host/api/v1/video-tasks/stream
+# ws(s)://host/api/v1/video-tasks/stream?access_token=<JWT>
 #
-# 鉴权优先级（与 REST 保持一致）：
-#   1. HttpOnly Cookie: ``access_token``（推荐，前端 new WebSocket(url) 即可，浏览器自动携带同源 Cookie）
-#   2. Query ``?token=<JWT>``（过渡期兼容，计划废弃；不建议新客户端使用，token 会落进网关/代理 access log）
+# 鉴权：仅接受 Query ``access_token``（JWT）。不接受 Cookie；注意 token 可能出现在网关/代理 access log。
 # 通道：每个商户订阅独立 Redis channel gen:status:{store_id}
 #
 # 心跳协议（仅接受 JSON 文本帧）：
@@ -24,7 +21,6 @@ router = APIRouter(prefix="/video-tasks", tags=["video-tasks"])
 @router.websocket("/stream")
 async def ws_generation_status(
     websocket: WebSocket,
-    token: Optional[str] = Query(default=None),
+    access_token: Optional[str] = Query(default=None),
 ):
-    access_token = extract_access_token_from_cookies(websocket.cookies, token)
     await handle_generation_status_ws(websocket, access_token)

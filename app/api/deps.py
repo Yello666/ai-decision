@@ -19,9 +19,9 @@ def extract_access_token_from_cookies(
     cookies: Mapping[str, str],
     fallback_token: Optional[str] = None,
 ) -> Optional[str]:
-    """按优先级提取 access token：Cookie → fallback（Bearer / query，兼容过渡期）。
+    """按优先级提取 access token：Cookie → fallback（Bearer，供 REST 使用）。
 
-    REST 和 WebSocket 共用：REST 传入 ``request.cookies``，WS 传入 ``websocket.cookies``。
+    REST 传入 ``request.cookies``；WebSocket 在路由层单独使用 ``?access_token=``，不经由此函数。
     """
     settings = get_settings()
     cookie_token = cookies.get(settings.ACCESS_COOKIE_NAME)
