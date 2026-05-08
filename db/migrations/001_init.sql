@@ -4,22 +4,45 @@ CREATE DATABASE IF NOT EXISTS `shopify_ai`;
 USE `shopify_ai`;
 
 -- ---------------------------------------------------------------------------
--- 商家表：平台注册的 Shopify 商户，与 Shopify 店铺一一对应
+-- 商家表：含 Shopify OAuth 商户与平台自注册商户（account_type 区分）
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS merchants (
   id INT AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
-  shopify_store_id VARCHAR(64) NOT NULL UNIQUE COMMENT 'Shopify 店铺数字 ID（来自 shop.json），系统内店铺唯一标识，用于 JWT sub 与多租户隔离',
+  shopify_store_id VARCHAR(64) NOT NULL UNIQUE COMMENT '租户/店铺唯一标识：Shopify 时为店铺数字 ID；自注册时为业务生成的 ID；用于 JWT sub 与多租户隔离',
   shopify_domain VARCHAR(255) NULL COMMENT '店铺域名，如 mystore.myshopify.com，用于拼 OAuth/API 请求 URL',
   shopify_category VARCHAR(128) NULL COMMENT '店铺类目（来自 Shopify shop.json，若有）',
   name VARCHAR(128) NOT NULL COMMENT '商户显示名称，亦作为登录用户名',
   email VARCHAR(128) NOT NULL UNIQUE COMMENT '登录邮箱，唯一',
   password_hash VARCHAR(256) NOT NULL COMMENT '登录密码 bcrypt 哈希',
   shopify_access_token VARCHAR(512) NULL COMMENT 'Shopify OAuth 换取的 access_token，用于代表该店铺调用 Shopify API（如发布内容、读产品）',
+  account_type VARCHAR(32) NOT NULL DEFAULT 'shopify' COMMENT '账户来源：shopify=OAuth 店铺注册；standalone=平台自注册（无 Shopify OAuth）',
   is_active BOOLEAN DEFAULT TRUE COMMENT '是否启用，禁用后无法登录',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   INDEX idx_merchants_store_id (shopify_store_id),
   INDEX idx_merchants_email (email)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商家表：平台注册的 Shopify 商户';
+
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商家表：Shopify 与平台自注册商户';
+
+-- ---------------------------------------------------------------------------
+-- 自注册商户商品：account_type=standalone 时商品列表/详情从此表读取
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS merchant_local_products (
+  id INT AUTO_INCREMENT PRIMARY KEY COMMENT '主键，对外作为 product_id',
+  merchant_id INT NOT NULL COMMENT '商户 id，关联 merchants.id',
+  title VARCHAR(512) NOT NULL COMMENT '商品标题',
+  description TEXT NULL COMMENT '商品描述（纯文本）',
+  price DECIMAL(12,2) NOT NULL DEFAULT 0 COMMENT '售价',
+  compare_at_price DECIMAL(12,2) NULL COMMENT '划线价/原价',
+  image_url VARCHAR(2048) NULL COMMENT '主图 URL',
+  inventory INT NOT NULL DEFAULT 0 COMMENT '库存',
+  product_type VARCHAR(128) NULL COMMENT '商品类型，用于列表筛选',
+  status VARCHAR(32) NOT NULL DEFAULT 'active' COMMENT 'active|draft|archived',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  CONSTRAINT fk_mlp_merchant FOREIGN KEY (merchant_id) REFERENCES merchants (id) ON DELETE CASCADE,
+  INDEX idx_mlp_merchant_id (merchant_id),
+  INDEX idx_mlp_merchant_since (merchant_id, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='自注册商户商品（standalone 商品数据源）';
 
 -- ---------------------------------------------------------------------------
 -- 热点表：全局热点（如 YouTube 趋势），所有商家看到同一份数据，不按店铺隔离

@@ -33,6 +33,24 @@ MAX_REVISION_COUNT = 10  # 视频脚本最大修改轮次
 MEDIA_REFERENCE_TAG_RE = re.compile(r"\[(?:image|video|audio|图|视频|音频)\d+\]", re.IGNORECASE)
 
 
+def _coerce_segment_duration_seconds(raw: Any, *, default: int = 5) -> int:
+    """单段时长：-1 表示方舟 API 由模型自主选择；否则夹到 [MIN, MAX]。"""
+    if raw == -1:
+        return -1
+    if not isinstance(raw, int):
+        raw = default
+    return max(MIN_SEGMENT_DURATION, min(raw, MAX_SEGMENT_DURATION))
+
+
+def _total_duration_from_segments(segments: list[dict]) -> int | None:
+    """任一段为自动时长 (-1) 时总时长未知，返回 None；否则返回各段时长之和。"""
+    if not segments:
+        return 0
+    if any(s.get("duration") == -1 for s in segments):
+        return None
+    return sum(_coerce_segment_duration_seconds(s.get("duration", 5)) for s in segments)
+
+
 # ──────────────────────────────────────────────
 # 节点 A：意图识别与参数提取
 # ──────────────────────────────────────────────
@@ -186,10 +204,7 @@ async def _prepare_segment_for_submission(
     from app.services.video_thread_service.video_graph.llm_utils import translate_to_english
 
     normalized = dict(segment)
-    duration = normalized.get("duration", 5)
-    if not isinstance(duration, int):
-        duration = 5
-    normalized["duration"] = max(MIN_SEGMENT_DURATION, min(duration, MAX_SEGMENT_DURATION))
+    normalized["duration"] = _coerce_segment_duration_seconds(normalized.get("duration", 5))
 
     desc = (normalized.get("description") or "").strip()
     desc_zh = (normalized.get("description_zh") or "").strip()
@@ -326,7 +341,7 @@ async def plan_script(state: VideoGenerationState) -> dict[str, Any]:
         await publish_event(thread_id, "error", {"message": f"剧本标准化失败: {e}"})
         return {"current_step": "error", "error": f"剧本标准化失败: {e}"}
 
-    total_dur = sum(s.get("duration", 5) for s in normalized_segments) #把所有片段的时长加起来计算出总时长
+    total_dur = _total_duration_from_segments(normalized_segments)
     normalized_segments = _enforce_seedance2_segment_modes(
         normalized_segments,
         mode=mode,
@@ -502,7 +517,7 @@ async def apply_edit(state: VideoGenerationState) -> dict[str, Any]:
         await publish_event(thread_id, "error", {"message": f"编辑后剧本中文翻译失败: {e}"})
         return {"current_step": "error", "error": f"编辑后剧本中文翻译失败: {e}"}
 
-    total_dur = sum(s.get("duration", 5) for s in current_segments)
+    total_dur = _total_duration_from_segments(current_segments)
 
     await publish_event(thread_id, "segments_updated", {
         "message": "编辑已应用",
@@ -574,7 +589,7 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
         logger.exception("重写后剧本标准化失败")
         return {"current_step": "error", "error": f"重写后剧本标准化失败: {e}"}
 
-    total_dur = sum(s.get("duration", 5) for s in normalized_segments)
+    total_dur = _total_duration_from_segments(normalized_segments)
     mode = state.get("parsed_mode", "text_to_video")
     media = state.get("parsed_media", {})
     normalized_segments = _enforce_seedance2_segment_modes(
@@ -636,10 +651,7 @@ def build_payload_for_segment(
     if not prompt:
         raise ValueError("segment description 不能为空")
 
-    duration = segment.get("duration", 5)
-    if not isinstance(duration, int) or duration == -1:
-        duration = 5
-    duration = max(MIN_SEGMENT_DURATION, min(duration, MAX_SEGMENT_DURATION))
+    duration = _coerce_segment_duration_seconds(segment.get("duration", 5))
 
     common: dict[str, Any] = {
         "prompt": prompt,

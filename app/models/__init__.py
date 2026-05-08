@@ -1,5 +1,6 @@
 from .base import Base
 from .merchant import Merchant
+from .merchant_local_product import MerchantLocalProduct
 from .hotspot import Hotspot
 from .brand import Brand
 from .generation import Generation
@@ -12,6 +13,7 @@ from .recommend_email_schedule import (
 __all__ = [
     "Base",
     "Merchant",
+    "MerchantLocalProduct",
     "Hotspot",
     "Brand",
     "Generation",

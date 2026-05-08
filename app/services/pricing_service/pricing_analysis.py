@@ -396,9 +396,19 @@ async def _node_apply(state: PricingGraphState) -> dict[str, Any]:
     """
     from datetime import datetime, timezone
 
-    logger.info("Graph: apply - updating prices on Shopify")
-
     merchant = _restore_merchant(state["merchant_info"])
+    if getattr(merchant, "account_type", None) == "standalone":
+        logger.info("Graph: apply skipped — standalone merchant has no Shopify price push")
+        result = dict(state.get("result") or {})
+        result["status"] = "approved_apply_skipped_standalone"
+        result["applied_products"] = []
+        result["apply_errors"] = [
+            {"error": "standalone_merchant_cannot_apply_shopify_prices"},
+        ]
+        result["applied_at"] = datetime.now(timezone.utc).isoformat()
+        return {"result": result, "command": "approve"}
+
+    logger.info("Graph: apply - updating prices on Shopify")
     products = state.get("products", [])
     selection_meta = state.get("selection_meta", [])
     result = state.get("result", {})
@@ -622,6 +632,7 @@ async def run_pricing_analysis(
         "shopify_domain": merchant.shopify_domain,
         "shopify_access_token": merchant.shopify_access_token,
         "shopify_store_id": merchant.shopify_store_id,
+        "account_type": merchant.account_type,
     }
 
     input_state: Dict[str, Any] = {

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.security import verify_password, get_password_hash
 from app.models import Merchant
 from app.core.config import get_settings
-from app.schemas.merchant import MerchantCreate
+from app.schemas.merchant import MerchantCreate, MerchantLocalCreate
 from app.db.redis import get_redis_client
 
 settings = get_settings()
@@ -22,6 +22,40 @@ def authenticate_merchant(db: Session, username:str, password: str) -> Optional[
     if not verify_password(password, merchant.password_hash):
         return None
     return merchant
+
+
+def register_merchant_local(db: Session, payload: MerchantLocalCreate) -> Merchant:
+    """创建 standalone 商户：租户 ID 为 UUID，不写入 Shopify token。"""
+    name = payload.name.strip()
+    email = payload.email.strip()
+    if not name or not email or not payload.password:
+        raise ValueError("用户名、邮箱、密码均不能为空")
+
+    existing = (
+        db.query(Merchant)
+        .filter((Merchant.email == email) | (Merchant.name == name))
+        .first()
+    )
+    if existing:
+        raise ValueError("该邮箱或用户名已被注册")
+
+    tenant_id = str(uuid.uuid4())
+    db_merchant = Merchant(
+        email=email,
+        password_hash=get_password_hash(payload.password),
+        name=name,
+        shopify_store_id=tenant_id,
+        account_type="standalone",
+        shopify_domain=None,
+        shopify_category=None,
+        shopify_access_token=None,
+        is_active=True,
+    )
+    db.add(db_merchant)
+    db.commit()
+    db.refresh(db_merchant)
+    return db_merchant
+
 
 def get_shopify_auth_url(shop_domain: str, state: str) -> str:
     scopes = "read_products,read_content,read_themes" 
@@ -101,6 +135,7 @@ async def complete_registration(db: Session, state: str, code: str, shop_domain:
         shopify_domain=merchant_in.shopify_domain,
         shopify_category=shopify_category,
         shopify_access_token=access_token,
+        account_type="shopify",
         is_active=True,
     )
     

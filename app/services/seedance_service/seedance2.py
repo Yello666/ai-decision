@@ -162,7 +162,7 @@ def build_request_payload(req: Seedance2VideoRequest) -> dict[str, Any]:
       - safety_identifier:        string
       - resolution:               string ("480p" / "720p")
       - ratio:                    string ("16:9" / "9:16" / "1:1" / "3:4" / "4:3" / "21:9" / "adaptive")
-      - duration:                 integer (4~15)
+      - duration:                 integer (4~15，或 -1 由模型自主选择)
       - seed:                     integer (-1 为随机)
       - watermark:                boolean
     """

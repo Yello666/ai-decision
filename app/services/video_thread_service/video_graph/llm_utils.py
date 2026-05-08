@@ -158,7 +158,7 @@ You are a senior direct-response video strategist and Seedance 2.0 prompt engine
 Each segment must include:
 - segment_id: int, starting from 1
 - description: English prompt for the video model (vivid, cinematic, with camera/lighting details)
-- duration: int in [4, 15] seconds
+- duration: int, either -1 (model chooses length per Seedance API) or in [4, 15] seconds
 - mode: one of text_to_video, first_frame, multimodal_reference
 
 ## USER INPUT (HIGH PRIORITY — MUST FOLLOW)
@@ -189,7 +189,7 @@ The user-provided default_mode is only a hint for segment 1 when no reference as
 - default_mode = text_to_video → segment 1 has no labels and uses text_to_video; later segments default to first_frame unless they embed labels.
 - default_mode = multimodal_reference → prefer embedding labels and using multimodal_reference whenever it makes the visual stronger.
 
-Constraints: Duration per segment must be in [4, 15] seconds. Total English prompts must be under 1000 words.
+Constraints: Each segment duration is -1 (auto) or in [4, 15] seconds. Total English prompts must be under 1000 words.
 
 ## PROMPT WRITING RULES
 - Specificity: Detail the subject appearance, product appearance, motion, camera angle (close-up, tracking, handheld, macro, etc.), lighting, and background.
@@ -294,8 +294,10 @@ async def call_script_planner(
             )
         seg.setdefault("duration", 5)
         dur = seg["duration"]
-        if not isinstance(dur, int) or dur == -1:
-            seg["duration"] = 5
+        if dur == -1:
+            seg["duration"] = -1
+        elif not isinstance(dur, int):
+            seg["duration"] = max(MIN_SEGMENT_DURATION, min(5, MAX_SEGMENT_DURATION))
         else:
             seg["duration"] = max(MIN_SEGMENT_DURATION, min(dur, MAX_SEGMENT_DURATION))
 
@@ -317,7 +319,7 @@ MEDIA REFERENCE RULES (HIGHEST PRIORITY):
 - Do not remove existing media reference labels unless the user's feedback explicitly asks to stop using that asset.
 
 OTHER RULES:
-1. Each segment's duration MUST be an integer in [4, 15] seconds (Seedance 2.0 constraint).
+1. Each segment's duration MUST be -1 (model auto) or an integer in [4, 15] seconds (Seedance 2.0).
 2. Keep segment_id numbering consistent.
 3. The English description is the actual prompt for the video generation model.
 4. When generate_audio is true, dialogue MUST be wrapped in English double quotes.

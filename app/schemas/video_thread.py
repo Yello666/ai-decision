@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.hotspot import BrandObject, TrendObject
 from app.schemas.product import ProductObject
@@ -75,8 +75,22 @@ class EditedSegmentInput(BaseModel):
     segment_id: int
     description: Optional[str] = None
     description_zh: Optional[str] = None
-    duration: Optional[int] = Field(default=None, ge=4, le=15)
+    duration: Optional[int] = Field(
+        default=None,
+        description="秒；4~15，或 -1 表示由模型自主选择时长",
+    )
     mode: Optional[Literal["text_to_video", "multimodal_reference", "first_frame"]] = None
+
+    @field_validator("duration")
+    @classmethod
+    def _duration_allow_auto(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return v
+        if v == -1:
+            return v
+        if 4 <= v <= 15:
+            return v
+        raise ValueError("duration 须为 -1 或 4~15 的整数")
 
 
 class ResumeThreadRequest(BaseModel):

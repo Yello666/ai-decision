@@ -156,11 +156,11 @@ class Settings(BaseSettings):
     # ------------------------------
     # 本地开发专用覆盖配置
     # ------------------------------
-    _LOCAL_MYSQL_HOST: str = "192.168.64.2"
+    _LOCAL_MYSQL_HOST: str = "localhost"
     _LOCAL_MYSQL_PASSWORD: str = "123456"
     _LOCAL_MYSQL_USER: str = "root"
     _LOCAL_MYSQL_PORT: int = 3306
-    _LOCAL_REDIS_HOST: str = "192.168.64.2"
+    _LOCAL_REDIS_HOST: str = "127.0.0.1"
     _LOCAL_REDIS_PASSWORD: str = "123456"
     _LOCAL_SHOPIFY_REDIRECT_URL: str = "http://127.0.0.1:8000/api/v1/auth/shopify/callback"
 

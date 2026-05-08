@@ -150,9 +150,7 @@ class Seedance2VideoRequest(BaseModel):
 
     duration: Optional[int] = Field(
         default=5,
-        ge=4,
-        le=15,
-        description="视频时长（秒），官方范围 4~15，-1 表示模型自主选择",
+        description="视频时长（秒）：4~15；-1 表示由模型自主选择时长（对齐方舟 Seedance 2.0）",
     )
 
     resolution: Optional[Literal["480p", "720p","1080p"]] = Field(
@@ -254,6 +252,18 @@ class Seedance2VideoRequest(BaseModel):
                 raise ValueError("参考音频数量不可超过 3 段")
 
         return self
+
+    @model_validator(mode="after")
+    def _validate_duration_value(self) -> "Seedance2VideoRequest":
+        """duration 为 -1（模型自主）或 4~15 秒。"""
+        d = self.duration
+        if d is None:
+            return self
+        if d == -1:
+            return self
+        if 4 <= d <= 15:
+            return self
+        raise ValueError("duration 须为 -1（模型自主选择时长）或 4~15 的整数")
 
 
 # ====================================================================

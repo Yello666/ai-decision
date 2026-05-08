@@ -781,8 +781,8 @@ async def list_video_threads(
 # 借助 LangGraph ``aget_state_history`` 把所有 checkpoint 快照拉回来，按时间正序
 # 解析出对前端有意义的"轮次"（user_input → assistant_draft → user_action → …）。
 # 设计要点：
-#   - checkpoint 数量可能很多（每个 node 写一次），通过 metadata.writes 来
-#     判定该次是由哪个 node 触发，避免靠"values 差异比对"的脆弱判定；
+#   - checkpoint 数量可能很多；Postgres 持久化后 metadata.writes 不可用，
+#     因此用 values（current_step / human_action / script_segments 签名）推断 turn；
 #   - segments 返回给前端前统一用 ``format_segments_for_view`` 脱敏；
 #   - 即使某些 checkpoint 已被清理（TTL 到期），剩下的 turn 仍可渲染时间线。
 
@@ -812,25 +812,47 @@ def _checkpoint_id_of(snapshot: Any) -> Optional[str]:
     return (cfg.get("configurable") or {}).get("checkpoint_id")
 
 
-# metadata.writes 中，触发"一版新草稿"的节点
-_DRAFT_WRITER_NODES = frozenset({"plan_script", "apply_edit", "revise_script"})
+def _draft_fingerprint(raw_segments: list[Any]) -> str:
+    """用于区分「新一版分镜草稿」的稳定签名（Postgres 持久化后无 metadata.writes）。"""
+    normalized: list[dict[str, Any]] = []
+    for s in raw_segments or []:
+        if not isinstance(s, dict):
+            continue
+        normalized.append(
+            {
+                "segment_id": s.get("segment_id"),
+                "description": s.get("description"),
+                "description_zh": s.get("description_zh"),
+                "duration": s.get("duration"),
+                "mode": s.get("mode"),
+            }
+        )
+    return json.dumps(normalized, sort_keys=True, ensure_ascii=False)
 
 
 def _build_turn_from_snapshot(
     snapshot: Any,
     *,
+    prev_values: Optional[dict[str, Any]],
     state_emitted_user_input: bool,
     submitted_emitted: bool,
-) -> tuple[Optional[ThreadHistoryTurn], bool, bool]:
+    last_draft_fingerprint: Optional[str],
+) -> tuple[Optional[ThreadHistoryTurn], bool, bool, Optional[str]]:
     """将单个 snapshot 映射为 0 个或 1 个历史 turn。
 
-    返回 ``(turn, new_state_emitted_user_input, new_submitted_emitted)``；
-    turn 为 None 表示这个 checkpoint 不需要对前端暴露（如 parse_intent / set_waiting_human）。
+    Postgres checkpointer 落库时会剥掉 ``metadata.writes``，因此草稿 / 决策 / 提交
+    仅靠 ``values``（``current_step``、``human_action``、``script_segments`` 等）推断。
+
+    返回 ``(turn, new_state_emitted_user_input, new_submitted_emitted, new_last_draft_fingerprint)``。
     """
     values: dict = getattr(snapshot, "values", None) or {}
+    if not isinstance(values, dict):
+        values = {}
     metadata: dict = getattr(snapshot, "metadata", None) or {}
-    writes = metadata.get("writes") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
     source = metadata.get("source")
+    prev_step = (prev_values or {}).get("current_step") if prev_values else None
 
     created_at = _snapshot_created_at(snapshot)
     checkpoint_id = _checkpoint_id_of(snapshot)
@@ -844,6 +866,8 @@ def _build_turn_from_snapshot(
         "revision_count": revision_count,
     }
 
+    last_fp = last_draft_fingerprint
+
     # 1) 第一条 user_input：由 create_thread_task 里 aupdate_state 写入，source="update"
     if not state_emitted_user_input and source in ("input", "update"):
         user_input = (values.get("user_input") or "").strip()
@@ -853,14 +877,31 @@ def _build_turn_from_snapshot(
                 user_input=user_input,
                 **base_kwargs,
             )
-            return turn, True, submitted_emitted
+            return turn, True, submitted_emitted, last_fp
 
-    # 2) LLM 产出的某一版草稿：plan_script / apply_edit / revise_script
-    if isinstance(writes, dict) and any(n in writes for n in _DRAFT_WRITER_NODES):
-        raw_segments = values.get("script_segments") or []
-        if raw_segments:
+    # 2) 用户决策：resume 后 human_interrupt 返回 human_responded + human_action
+    action = values.get("human_action")
+    if (
+        step == "human_responded"
+        and prev_step != "human_responded"
+        and action in ("approve", "edit", "feedback")
+    ):
+        turn = ThreadHistoryTurn(
+            kind="user_action",
+            action=action,
+            human_feedback=values.get("human_feedback") or None,
+            human_edited_segments=values.get("human_edited_segments") or None,
+            **base_kwargs,
+        )
+        return turn, state_emitted_user_input, submitted_emitted, last_fp
+
+    # 3) LLM / 编辑产出的一版可审阅草稿（plan_script、apply_edit、revise_script 均落在此 step）
+    raw_segments = values.get("script_segments") or []
+    if step == "plan_script_done" and isinstance(raw_segments, list) and raw_segments:
+        fp = _draft_fingerprint(raw_segments)
+        if fp != last_fp:
             config = values.get("parsed_config") or {}
-            language = config.get("language", "zh")
+            language = (config.get("language") if isinstance(config, dict) else None) or "zh"
             turn = ThreadHistoryTurn(
                 kind="assistant_draft",
                 segments=format_segments_for_view(raw_segments, language),
@@ -868,31 +909,14 @@ def _build_turn_from_snapshot(
                 execution_strategy=values.get("execution_strategy"),
                 **base_kwargs,
             )
-            return turn, state_emitted_user_input, submitted_emitted
+            return turn, state_emitted_user_input, submitted_emitted, fp
 
-    # 3) 用户决策：human_interrupt 节点第二次写入时把 human_action 等写进 state
-    if isinstance(writes, dict) and "human_interrupt" in writes:
-        action = values.get("human_action")
-        if action in ("approve", "edit", "feedback"):
-            turn = ThreadHistoryTurn(
-                kind="user_action",
-                action=action,
-                human_feedback=values.get("human_feedback") or None,
-                human_edited_segments=values.get("human_edited_segments") or None,
-                **base_kwargs,
-            )
-            return turn, state_emitted_user_input, submitted_emitted
-
-    # 4) 任务提交：记一个里程碑 turn，方便前端画"已提交 Seedance"
-    if (
-        not submitted_emitted
-        and isinstance(writes, dict)
-        and "assemble_and_submit" in writes
-    ):
+    # 4) 已向 Seedance 提交（assemble_and_submit 返回值）
+    if not submitted_emitted and step == "submitted":
         turn = ThreadHistoryTurn(kind="submitted", **base_kwargs)
-        return turn, state_emitted_user_input, True
+        return turn, state_emitted_user_input, True, last_fp
 
-    return None, state_emitted_user_input, submitted_emitted
+    return None, state_emitted_user_input, submitted_emitted, last_fp
 
 
 async def get_thread_conversation_history(
@@ -929,14 +953,22 @@ async def get_thread_conversation_history(
     turns: list[ThreadHistoryTurn] = []
     state_emitted_user_input = False
     submitted_emitted = False
+    last_draft_fingerprint: Optional[str] = None
+    prev_values: Optional[dict[str, Any]] = None
     for snap in snapshots:
-        turn, state_emitted_user_input, submitted_emitted = _build_turn_from_snapshot(
-            snap,
-            state_emitted_user_input=state_emitted_user_input,
-            submitted_emitted=submitted_emitted,
+        turn, state_emitted_user_input, submitted_emitted, last_draft_fingerprint = (
+            _build_turn_from_snapshot(
+                snap,
+                prev_values=prev_values,
+                state_emitted_user_input=state_emitted_user_input,
+                submitted_emitted=submitted_emitted,
+                last_draft_fingerprint=last_draft_fingerprint,
+            )
         )
         if turn is not None:
             turns.append(turn)
+        v = getattr(snap, "values", None) or {}
+        prev_values = v if isinstance(v, dict) else {}
 
     # 兜底：如果 checkpoint 已被 TTL 清理、或刚创建还没落 state，而 MySQL 索引行还在，
     # 至少把 user_input 作为第一条 turn 还原出来，保证前端不至于空白。

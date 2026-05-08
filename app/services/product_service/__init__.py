@@ -1,4 +1,4 @@
-from .shopify_products import (
+from .catalog import (
     fetch_product,
     fetch_products,
     update_product_prices,

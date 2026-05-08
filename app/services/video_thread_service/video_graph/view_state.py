@@ -160,11 +160,15 @@ def map_graph_state_to_view(
     # --- 3) 不同阶段按需下发业务数据 ---
     if status == "waiting_human":
         view.segments = format_segments_for_view(raw_segments, language)
-        view.total_duration = state.get("total_duration", 0)
+        view.total_duration = (
+            state["total_duration"] if "total_duration" in state else 0
+        )
         view.execution_strategy = state.get("execution_strategy", "parallel")
     elif status == "finished":
         view.segments = format_segments_for_view(raw_segments, language)
-        view.total_duration = state.get("total_duration", 0)
+        view.total_duration = (
+            state["total_duration"] if "total_duration" in state else 0
+        )
         view.execution_strategy = state.get("execution_strategy", "parallel")
         view.task_results = state.get("task_results", [])
         view.final_status = state.get("final_status", "submitted")

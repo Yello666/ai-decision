@@ -21,11 +21,12 @@ from app.core.security import (
 )
 from app.db.mysql import get_db
 from app.schemas.auth import LoginSchema, RefreshRequest  # noqa: F401  # 保留以兼容外部引用
-from app.schemas.merchant import MerchantCreate
+from app.schemas.merchant import MerchantCreate, MerchantLocalCreate
 from app.services.auth_service import (
     authenticate_merchant,
     complete_registration,
     initiate_registration,
+    register_merchant_local,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,32 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 async def register(payload: MerchantCreate):
     auth_url = await initiate_registration(payload)
     return success({"auth_url": auth_url})
+
+
+@router.post("/localRegister", operation_id="localRegister")
+async def local_register(
+    response: Response,
+    payload: MerchantLocalCreate,
+    db: Session = Depends(get_db),
+):
+    """平台自注册：不落 Shopify OAuth，写入 account_type=standalone，并签发会话（Cookie + 响应体 token）。"""
+    try:
+        merchant = register_merchant_local(db, payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    tokens = await _issue_tokens_for_store(merchant.shopify_store_id)
+    set_auth_cookies(response, tokens["access_token"], tokens["refresh_token"])
+    return success({
+        **tokens,
+        "merchant": {
+            "id": merchant.id,
+            "name": merchant.name,
+            "email": merchant.email,
+            "shopify_store_id": merchant.shopify_store_id,
+            "account_type": merchant.account_type,
+        },
+    })
 
 
 async def _issue_tokens_for_store(store_id: str) -> Dict[str, str]:
