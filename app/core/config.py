@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # True  → 使用本地配置
     # False → 使用.env线上配置
     LOCAL_DEV: bool = False
+    
 
     # 基础项目配置
     PROJECT_NAME: str = "AI Decision Platform"
