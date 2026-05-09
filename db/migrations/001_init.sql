@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS merchant_local_products (
   merchant_id INT NOT NULL COMMENT '商户 id，关联 merchants.id',
   title VARCHAR(512) NOT NULL COMMENT '商品标题',
   description TEXT NULL COMMENT '商品描述（纯文本）',
+  size_description VARCHAR(255) NULL COMMENT '商品尺寸描述（如长宽高）',
   price DECIMAL(12,2) NOT NULL DEFAULT 0 COMMENT '售价',
   compare_at_price DECIMAL(12,2) NULL COMMENT '划线价/原价',
   image_url VARCHAR(2048) NULL COMMENT '主图 URL',
@@ -45,15 +46,19 @@ CREATE TABLE IF NOT EXISTS merchant_local_products (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='自注册商户商品（standalone 商品数据源）';
 
 -- ---------------------------------------------------------------------------
--- 热点表：全局热点（如 YouTube 趋势），所有商家看到同一份数据，不按店铺隔离
+-- 热点表：商户自行上传的热点（与 YouTube 全局热点缓存分离，按商户隔离）
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS hotspots (
   id INT AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+  merchant_id INT NOT NULL COMMENT '所属商户 id，外键关联 merchants.id',
   title VARCHAR(255) NOT NULL COMMENT '热点标题',
   summary TEXT NOT NULL COMMENT '热点摘要/描述',
+  tags VARCHAR(255) NULL COMMENT '热点标签，逗号分隔（如：美食,跨界）；可选',
+  audience VARCHAR(255) NULL COMMENT '受众画像，逗号分隔（如：18-35岁职场女性,硬核科技粉）；可选',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  INDEX idx_hotspots_created_at (created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='热点表：全局热点，所有商家共享';
+  CONSTRAINT fk_hotspots_merchant FOREIGN KEY (merchant_id) REFERENCES merchants (id) ON DELETE CASCADE,
+  INDEX idx_hotspots_merchant_created_at (merchant_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='热点表：商户自行上传的热点，按 merchant_id 隔离';
 
 -- ---------------------------------------------------------------------------
 -- 品牌表：商户配置的品牌信息，与 merchants 一对多（按 merchant_id 关联）
@@ -62,11 +67,11 @@ CREATE TABLE IF NOT EXISTS brand (
   id INT AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
   shopify_store_id VARCHAR(64) NOT NULL COMMENT '所属店铺 ID，便于按店铺查询',
   merchant_id INT NOT NULL COMMENT '所属商户 id，外键关联 merchants.id',
-  name VARCHAR(64) NOT NULL COMMENT '品牌名称',
-  core_value VARCHAR(64) NOT NULL COMMENT '品牌核心价值/目标',
+  name VARCHAR(50) NOT NULL COMMENT '品牌名称',
+  core_value VARCHAR(200) NOT NULL COMMENT '品牌核心价值/目标',
   mainly_sold_products VARCHAR(64) NOT NULL COMMENT '品牌所属行业',
-  tone VARCHAR(64) NOT NULL COMMENT '品牌调性',
-  audience VARCHAR(64) NULL COMMENT '品牌目标受众',
+  tone VARCHAR(50) NOT NULL COMMENT '品牌调性',
+  audience VARCHAR(50) NULL COMMENT '品牌目标受众',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   INDEX idx_brand_store_id (shopify_store_id),
   INDEX idx_brand_merchant_id (merchant_id),

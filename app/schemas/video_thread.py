@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
 
@@ -51,6 +51,7 @@ class ProductForPrompt(BaseModel):
 
     name: str = Field(..., description="用于 prompt 的商品或规格名称")
     description: str = Field(..., description="用于 prompt 的商品描述")
+    size_description: str = Field(default="", description="商品尺寸描述（如长宽高）")
     price: float = Field(..., description="用于 prompt 的商品或规格价格")
     image_url: str = Field(default="", description="用于 prompt 的商品或规格参考图 URL")
 
@@ -220,6 +221,14 @@ class ThreadHistoryResponse(BaseModel):
     thumbnail_url: Optional[str] = None
     final_video_urls: list[str] = Field(default_factory=list)
     turns: list[ThreadHistoryTurn]
+    product: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="创建 thread 时写入 graph state 的完整商品快照（与 CreateThreadRequest.product 同源）",
+    )
+    product_for_prompt: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="剧情规划/提交侧使用的精简商品上下文（与 ProductForPrompt 同源）",
+    )
 
 # ---------- 查询任务响应 ----------
 class VideoTaskContent(BaseModel):

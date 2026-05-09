@@ -72,6 +72,7 @@ class VideoGenerationState(TypedDict, total=False):
     media_assets: dict
     config_params: ConfigParams
     shopify_store_id: str
+    is_standalone_merchant: bool
 
     # ---- 节点 A 提取结果 ----
     parsed_mode: Literal["text_to_video", "multimodal_reference"]
