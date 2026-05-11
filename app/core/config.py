@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # -------- 本地开发开关 --------
     # True  → 使用本地配置
     # False → 使用.env线上配置
-    LOCAL_DEV: bool = False
+    LOCAL_DEV: bool = True
     
 
     # 基础项目配置
@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     # ------------------------------
     # 邮件
     # ------------------------------
-    EMAIL_ENABLED: bool = False
+    EMAIL_ENABLED: bool = True
     EMAIL_SMTP_HOST: str = "smtp.qq.com"
     EMAIL_SMTP_PORT: int = 465
     EMAIL_USERNAME: Optional[str] = "2768843481@qq.com"
