@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # -------- 本地开发开关 --------
     # True  → 使用本地配置
     # False → 使用.env线上配置
-    LOCAL_DEV: bool = False
+    LOCAL_DEV: bool = True
     
 
     # 基础项目配置
@@ -147,6 +147,8 @@ class Settings(BaseSettings):
 
     TAVILY_API_KEY: str
     SERPAPI_API_KEY: Optional[str] = None
+    APIFY_API_KEY:str="apify_api_0fhtifAMQ2AflH8JR3DhKnfT5rEdaN0kEYqb"
+    APIFY_TIKTOK_ACTOR_ID:str="GdWCkxBtKWOsKjdch"
     #竟品信息过期时间
     COMPETITOR_CACHE_TTL: int = 7200
 
@@ -157,11 +159,11 @@ class Settings(BaseSettings):
     # ------------------------------
     # 本地开发专用覆盖配置
     # ------------------------------
-    _LOCAL_MYSQL_HOST: str = "localhost"
+    _LOCAL_MYSQL_HOST: str = "192.168.64.2"
     _LOCAL_MYSQL_PASSWORD: str = "123456"
     _LOCAL_MYSQL_USER: str = "root"
     _LOCAL_MYSQL_PORT: int = 3306
-    _LOCAL_REDIS_HOST: str = "127.0.0.1"
+    _LOCAL_REDIS_HOST: str = "192.168.64.2"
     _LOCAL_REDIS_PASSWORD: str = "123456"
     _LOCAL_SHOPIFY_REDIRECT_URL: str = "http://127.0.0.1:8000/api/v1/auth/shopify/callback"
 

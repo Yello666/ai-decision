@@ -10,6 +10,7 @@ from .video_thread import router as video_thread_router
 from .video_tasks import router as video_task_router
 from .seedance2 import router as seedance2_router
 from .upload import router as upload_router
+from .tiktok import router as tiktok_router
 
 router = APIRouter()
 router.include_router(auth_router)
@@ -23,3 +24,4 @@ router.include_router(video_thread_router)
 router.include_router(video_task_router)
 router.include_router(seedance2_router)
 router.include_router(upload_router)
+router.include_router(tiktok_router)
