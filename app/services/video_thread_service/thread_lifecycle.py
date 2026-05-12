@@ -118,6 +118,7 @@ def _build_product_for_prompt(payload: CreateThreadRequest) -> ProductForPrompt:
         return ProductForPrompt(
             name=payload.product.name,
             description=payload.product.description,
+            size_description=payload.product.size_description or "",
             price=payload.product.price,
             image_url=payload.product.image_url,
         )
@@ -125,6 +126,7 @@ def _build_product_for_prompt(payload: CreateThreadRequest) -> ProductForPrompt:
     return ProductForPrompt(
         name=selected_variant.name,
         description=payload.product.description,
+        size_description=payload.product.size_description or "",
         price=selected_variant.price,
         image_url=selected_variant.image_url or payload.product.image_url,
     )
@@ -521,6 +523,7 @@ async def create_thread_task(payload: CreateThreadRequest, merchant: Merchant) -
         "media_assets": media_assets,
         "config_params": payload.config_params.model_dump(mode="json") if payload.config_params else {},
         "shopify_store_id": merchant.shopify_store_id,
+        "is_standalone_merchant": (merchant.account_type == "standalone"),
         "revision_count": 0, #视频脚本最大修改轮次（10次，超过这个次数，将提示用户已达最大上下文？让用户直接编辑然后执行）
         "current_step": "initializing",
     }
@@ -988,6 +991,13 @@ async def get_thread_conversation_history(
         workflow_ended=(current_state.get("current_step") in ("done", "submitted")),
     )
 
+    product_raw = current_state.get("product")
+    product_for_prompt_raw = current_state.get("product_for_prompt")
+    product_snapshot = dict(product_raw) if isinstance(product_raw, dict) else None
+    product_for_prompt_snapshot = (
+        dict(product_for_prompt_raw) if isinstance(product_for_prompt_raw, dict) else None
+    )
+
     return ThreadHistoryResponse(
         thread_id=thread_id,
         status=status,  # type: ignore[arg-type]
@@ -997,5 +1007,7 @@ async def get_thread_conversation_history(
         thumbnail_url=row.thumbnail_url if row else None,
         final_video_urls=final_urls,
         turns=turns,
+        product=product_snapshot,
+        product_for_prompt=product_for_prompt_snapshot,
     )
 

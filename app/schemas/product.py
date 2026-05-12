@@ -131,6 +131,7 @@ class ProductObject(BaseModel):
     product_id: int = Field(..., description="Shopify product ID，唯一标识一个商品")
     name: str = Field(..., description="商品名称")
     description: str = Field(..., description="商品描述（纯文本，已去除 HTML 标签）")
+    size_description: str = Field(default="", description="商品尺寸描述（如长宽高）")
     price: float = Field(..., description="商品价格（若有折扣则为折后价）")
     image_url: str = Field(default="", description="商品主图 URL")
     inventory: int = Field(default=0, description="商品总库存数（所有规格库存之和）")

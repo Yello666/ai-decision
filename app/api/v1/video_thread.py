@@ -138,6 +138,9 @@ async def get_thread_history(
       - ``user_action``      用户的决策（approve / edit / feedback + 反馈 / 编辑明细）
       - ``submitted``        已向 Seedance 提交，不再有新草稿
 
+    响应根级还包含 ``product``、``product_for_prompt``（来自当前 graph state 快照；
+    checkpoint 缺失时可能为 null）。
+
     数据来源为 LangGraph Postgres checkpoint。超过 TTL 的老 thread 可能
     丢失中间草稿，但会兜底返回一条 user_input。
     """

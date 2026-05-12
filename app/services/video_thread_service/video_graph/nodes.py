@@ -31,6 +31,8 @@ MAX_SEGMENT_DURATION = 15
 MIN_SEGMENT_DURATION = 4  # Seedance 2.0 官方下限
 MAX_REVISION_COUNT = 10  # 视频脚本最大修改轮次
 MEDIA_REFERENCE_TAG_RE = re.compile(r"\[(?:image|video|audio|图|视频|音频)\d+\]", re.IGNORECASE)
+# 商品参考图在英文分镜里固定为 [image1]（与 parse_intent / LLM 规划约定一致）
+PRODUCT_IMAGE1_TAG_RE = re.compile(r"\[image1\]", re.IGNORECASE)
 
 
 def _coerce_segment_duration_seconds(raw: Any, *, default: int = 5) -> int:
@@ -719,6 +721,44 @@ async def create_seedance_video_task(req) -> dict[str, Any]:
     return await create_video_task(req)
 
 
+def _append_size_constraint_suffix(description: str, size_description: str) -> str:
+    suffix = (
+        " Product size constraint: the product is [image1], with dimensions "
+        f"{size_description}. Keep the product proportions and real-world scale "
+        "consistent with these dimensions, and avoid any size distortion."
+    )
+    if "Product size constraint:" in description:
+        return description
+    return f"{description.rstrip()}{suffix}"
+
+
+def _inject_size_constraint_for_submission(
+    segments: list[dict[str, Any]],
+    state: VideoGenerationState,
+) -> list[dict[str, Any]]:
+    if not state.get("is_standalone_merchant", False):
+        return [dict(seg) for seg in segments]
+
+    product_for_prompt = state.get("product_for_prompt") or {}
+    product = state.get("product") or {}
+    size_description = str(
+        product_for_prompt.get("size_description")
+        or product.get("size_description")
+        or ""
+    ).strip()
+    if not size_description:
+        return [dict(seg) for seg in segments]
+
+    with_size: list[dict[str, Any]] = []
+    for seg in segments:
+        cloned = dict(seg)
+        desc = str(cloned.get("description") or "").strip()
+        if desc and PRODUCT_IMAGE1_TAG_RE.search(desc):
+            cloned["description"] = _append_size_constraint_suffix(desc, size_description)
+        with_size.append(cloned)
+    return with_size
+
+
 async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
     """
     根据 script_segments 构建 Seedance payload 并提交任务。
@@ -734,7 +774,10 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
         "step": "assemble_and_submit_running",
     })
 
-    segments = state.get("script_segments", [])
+    segments = _inject_size_constraint_for_submission(
+        state.get("script_segments", []),
+        state,
+    )
     config = state.get("parsed_config", DEFAULT_CONFIG)
     store_id = state.get("shopify_store_id", "")
     media = state.get("parsed_media") or {}

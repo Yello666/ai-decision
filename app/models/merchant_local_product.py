@@ -18,6 +18,7 @@ class MerchantLocalProduct(Base):
     )
     title = Column(String(512), nullable=False)
     description = Column(Text, nullable=True)
+    size_description = Column(String(255), nullable=True)
     price = Column(Numeric(12, 2), nullable=False, default=0)
     compare_at_price = Column(Numeric(12, 2), nullable=True)
     image_url = Column(String(2048), nullable=True)

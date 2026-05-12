@@ -8,3 +8,4 @@ def configure_logging() -> None:
         level=settings.LOG_LEVEL,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)

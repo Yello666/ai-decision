@@ -9,6 +9,7 @@ class LocalProductCreate(BaseModel):
 
     title: str = Field(..., min_length=1, max_length=512)
     description: Optional[str] = None
+    size_description: Optional[str] = Field(default=None, max_length=255)
     price: float = Field(default=0, ge=0)
     compare_at_price: Optional[float] = Field(default=None, ge=0)
     image_url: Optional[str] = Field(default=None, max_length=2048)
@@ -22,6 +23,7 @@ class LocalProductUpdate(BaseModel):
 
     title: Optional[str] = Field(default=None, min_length=1, max_length=512)
     description: Optional[str] = None
+    size_description: Optional[str] = Field(default=None, max_length=255)
     price: Optional[float] = Field(default=None, ge=0)
     compare_at_price: Optional[float] = Field(default=None, ge=0)
     image_url: Optional[str] = Field(default=None, max_length=2048)
@@ -38,6 +40,7 @@ class LocalProductOut(BaseModel):
     id: int
     title: str
     description: Optional[str] = None
+    size_description: Optional[str] = None
     price: float
     compare_at_price: Optional[float] = None
     image_url: Optional[str] = None

@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     # ------------------------------
     # 邮件
     # ------------------------------
-    EMAIL_ENABLED: bool = False
+    EMAIL_ENABLED: bool = True
     EMAIL_SMTP_HOST: str = "smtp.qq.com"
     EMAIL_SMTP_PORT: int = 465
     EMAIL_USERNAME: Optional[str] = "2768843481@qq.com"
@@ -137,6 +137,7 @@ class Settings(BaseSettings):
     SEEDANCE_VIDEO_API_KEY: str
     LLM_API_KEY: Optional[str] = None
     LLM_API_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    LLM_MODEL_V4_DEEPSEEK: str = "deepseek-v4-pro"
     LLM_MODEL_36_PLUS: str = "qwen3.6-plus"
     LLM_MODEL_35_PLUS: str = "qwen3.5-plus"
     LLM_MODEL_36_FLASH: str = "qwen3.6-flash-2026-04-16"

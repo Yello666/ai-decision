@@ -230,11 +230,29 @@ async def upsert_recommend_email_schedule(
         .filter(MerchantHotspotRecommendEmailSchedule.merchant_id == current_merchant.id)
         .first()
     )
+    row_is_new = row is None
     if row is None:
         row = MerchantHotspotRecommendEmailSchedule(merchant_id=current_merchant.id)
         db.add(row)
 
     old_enabled = bool(row.is_enabled)
+    old_timing = None
+    if not row_is_new:
+        old_timing = (
+            row.mode,
+            int(row.send_hour),
+            int(row.send_minute),
+            row.timezone,
+            int(row.interval_hours),
+        )
+    new_timing = (
+        request.mode.value,
+        request.send_hour,
+        request.send_minute,
+        request.timezone,
+        request.interval_hours,
+    )
+    timing_changed = old_enabled and request.is_enabled and old_timing != new_timing
 
     row.is_enabled = request.is_enabled
     row.mode = request.mode.value
@@ -245,7 +263,7 @@ async def upsert_recommend_email_schedule(
     row.interval_hours = request.interval_hours
 
     if request.is_enabled:
-        if (not old_enabled) or (row.last_sent_at is None):
+        if (not old_enabled) or (row.last_sent_at is None) or timing_changed:
             now_utc = datetime.now(timezone.utc)
             if request.mode == RecommendEmailScheduleMode.interval_from_now:
                 row.last_sent_at = now_utc

@@ -46,6 +46,7 @@ def _row_to_product_object(row: MerchantLocalProduct) -> ProductObject:
         product_id=row.id,
         name=row.title or "",
         description=row.description or "",
+        size_description=row.size_description or "",
         price=float(row.price or 0),
         image_url=row.image_url or "",
         inventory=int(row.inventory or 0),
@@ -120,6 +121,7 @@ def create_for_merchant(db: Session, merchant_id: int, body: LocalProductCreate)
         merchant_id=merchant_id,
         title=body.title.strip(),
         description=body.description,
+        size_description=body.size_description,
         price=Decimal(str(body.price)),
         compare_at_price=Decimal(str(body.compare_at_price)) if body.compare_at_price is not None else None,
         image_url=body.image_url,
@@ -148,6 +150,8 @@ def update_for_merchant(
         row.title = patch["title"].strip()
     if "description" in patch:
         row.description = patch["description"]
+    if "size_description" in patch:
+        row.size_description = patch["size_description"]
     if "price" in patch and patch["price"] is not None:
         row.price = Decimal(str(patch["price"]))
     if "compare_at_price" in patch:

@@ -252,7 +252,7 @@ async def call_script_planner(
 
     client = _get_llm_client()
     resp = await client.chat.completions.create(
-        model=settings.LLM_MODEL_35_PLUS,
+        model=settings.LLM_MODEL_V4_DEEPSEEK,
         messages=[
             {"role": "system", "content": PLANNER_SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
@@ -390,7 +390,7 @@ async def call_script_reviser(
 
     client = _get_llm_client()
     resp = await client.chat.completions.create(
-        model=settings.LLM_MODEL_35_PLUS,
+        model=settings.LLM_MODEL_V4_DEEPSEEK,
         messages=[
             {"role": "system", "content": REVISER_SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
@@ -416,7 +416,7 @@ async def translate_to_english(text: str) -> str:
     settings = get_settings()
     client = _get_llm_client()
     resp = await client.chat.completions.create(
-        model=settings.LLM_MODEL_36_FLASH,
+        model=settings.LLM_MODEL_36_PLUS,
         messages=[
             {"role": "system", "content": TRANSLATE_SYSTEM_PROMPT},
             {"role": "user", "content": src},
@@ -440,7 +440,7 @@ async def translate_to_zh(text: str) -> str:
     settings = get_settings()
     client = _get_llm_client()
     resp = await client.chat.completions.create(
-        model=settings.LLM_MODEL_36_FLASH,
+        model=settings.LLM_MODEL_36_PLUS,
         messages=[
             {"role": "system", "content": TRANSLATE_TO_ZH_SYSTEM_PROMPT},
             {"role": "user", "content": src},

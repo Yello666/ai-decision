@@ -20,7 +20,7 @@ from app.services.hotspot_service.get_youtube_trends import get_trending_videos_
 
 logger = logging.getLogger(__name__)
 settings=get_settings()
-LLM_MODEL = settings.LLM_MODEL_36_FLASH
+LLM_MODEL = settings.LLM_MODEL_36_PLUS
 
 # proxy=None：强制不走系统/环境变量代理，避免全局代理干扰国内大模型请求
 ASYNC_LLM_CLIENT = AsyncOpenAI(base_url=settings.LLM_API_URL, api_key=settings.LLM_API_KEY, http_client=httpx.AsyncClient(proxy=None))
