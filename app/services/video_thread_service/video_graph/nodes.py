@@ -656,8 +656,8 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
 # 节点 D：API 组装与执行
 # ──────────────────────────────────────────────
 #seedance2.0返回信息地址，区分本地开发和生成环境，本地开发采用本机公网地址
-CALLBACK_URL = "https://23.156.152.46/api/v1/video-thread/callback"
-#CALLBACK_URL = "https://shop-ai.xin/api/v1/video-thread/callback"
+#CALLBACK_URL = "https://23.156.152.46/api/v1/video-thread/callback"
+CALLBACK_URL = "https://shop-ai.xin/api/v1/video-thread/callback"
 
 
 def _as_str_list(value: Any) -> list[str]:
