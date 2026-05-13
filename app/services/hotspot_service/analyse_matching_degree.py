@@ -1,6 +1,7 @@
 import json
 import asyncio
 import logging
+import math
 from typing import Any, Dict, List
 
 import httpx
@@ -68,6 +69,17 @@ def compute_compatibility_score(
     return round(max(0.0, min(100.0, raw)), 1)
 
 
+def _clamp_dimension_0_100(value: Any) -> float:
+    """与 compute_compatibility_score 一致，将雷达分项限制在 0–100，避免缓存/模型产出越界导致 Pydantic 校验失败。"""
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if math.isnan(x):
+        return 0.0
+    return max(0.0, min(100.0, x))
+
+
 # --------------------------
 # V3：面向"单品牌 + 多热点"的批量 LLM 匹配（品牌信息只写一次；带 (brand,trend) 结果缓存）
 # --------------------------
@@ -117,15 +129,28 @@ async def batch_match_hotspot_for_brand_async(
                     break
                 new_result_map[group[local_idx]] = res
 
-        if new_result_map:
-            await set_match_many(brand_fp, trends, new_result_map)
-
     responses: List[HotspotMatchResponse] = []
     for idx, trend in enumerate(trends):
         raw = hit_map.get(idx) or new_result_map.get(idx)
         if not raw:
             raise ValueError(f"缺少热点匹配结果，index={idx}")
-        responses.append(_build_match_response(brand, trend, raw))
+        try:
+            responses.append(_build_match_response(brand, trend, raw))
+        except Exception:
+            logger.exception(
+                "组装单条热点匹配失败 品牌=%s index=%d title=%s from_cache=%s raw_keys=%s",
+                brand.name,
+                idx,
+                (trend.title or "")[:300],
+                idx in hit_map,
+                sorted(raw.keys()) if isinstance(raw, dict) else type(raw).__name__,
+            )
+            raise
+
+    # 必须在整批结果校验通过后再写入缓存，否则 LLM 产出越界会先落库，后续请求一直 500
+    if new_result_map:
+        await set_match_many(brand_fp, trends, new_result_map)
+
     return responses
 
 
@@ -242,10 +267,10 @@ def _build_match_response(
             raise KeyError(f"缺少必要字段: {key}")
 
     radar = MatchRadar(
-        business_relevance=float(raw["business_relevance"]),
-        audience_overlap=float(raw["audience_overlap"]),
-        brand_voice_fit=float(raw["brand_voice_fit"]),
-        marketing_risk=float(raw["marketing_risk"]),
+        business_relevance=_clamp_dimension_0_100(raw["business_relevance"]),
+        audience_overlap=_clamp_dimension_0_100(raw["audience_overlap"]),
+        brand_voice_fit=_clamp_dimension_0_100(raw["brand_voice_fit"]),
+        marketing_risk=_clamp_dimension_0_100(raw["marketing_risk"]),
     )
     compatibility_score = compute_compatibility_score(
         radar.business_relevance,

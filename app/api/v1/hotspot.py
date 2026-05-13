@@ -137,6 +137,12 @@ async def match_hotspot(
             brand=brand,
         )
     except Exception as e:
+        logger.exception(
+            "批量匹配失败 merchant_id=%s brand=%s trends=%d",
+            current_merchant.id,
+            brand_model.name,
+            len(request.trends),
+        )
         raise HTTPException(status_code=500, detail=f"批量匹配失败：{str(e)}")
 
 
@@ -178,15 +184,21 @@ async def recommend_hotspots(
             min_compatibility_score=request.min_compatibility_score,
             brand=brand,
         )
+        return HotspotRecommendResponse(
+            items=items,
+            min_compatibility_score=request.min_compatibility_score,
+            analyzed_count=analyzed_count,
+        )
     except Exception as e:
+        logger.exception(
+            "推荐热点失败 merchant_id=%s brand=%s min_compatibility_score=%s platforms=%s",
+            current_merchant.id,
+            brand_model.name,
+            request.min_compatibility_score,
+            _RECOMMEND_PLATFORMS,
+        )
         msg = str(e).replace("\n", " ").replace("\\n", " ").strip()
         raise HTTPException(status_code=500, detail=f"推荐热点失败：{msg}")
-
-    return HotspotRecommendResponse(
-        items=items,
-        min_compatibility_score=request.min_compatibility_score,
-        analyzed_count=analyzed_count,
-    )
 
 
 def _schedule_row_to_state_response(
