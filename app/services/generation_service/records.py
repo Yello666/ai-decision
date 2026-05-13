@@ -49,7 +49,7 @@ def list_generations_by_thread_id(
             Generation.thread_id == thread_id,
             Generation.shopify_store_id == shopify_store_id,
         )
-        .order_by(Generation.id.asc())
+        .order_by(Generation.segment_id.asc(), Generation.id.asc())
         .all()
     )
 

@@ -17,6 +17,7 @@ class GenerationOut(BaseModel):
     type: str  # video | image | text
     status: str
     thread_id: Optional[str] = None
+    segment_id: Optional[int] = None
     prompt_used: Optional[str] = None
     trend_snapshot: Optional[dict] = None
     brand_snapshot: Optional[dict] = None

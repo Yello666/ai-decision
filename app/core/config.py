@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     LOG_FILE_ENABLED: bool = True
     LOG_FILE_DIR: str = "logs"
     LOG_FILE_MAX_BYTES: int = 1048576  # 1 MiB，单文件超限后同一天递增 02、03...
+    # cost 异步写盘队列上限（有界）；满时丢弃新记录并触发 logging 的 handleError（不阻塞业务线程）
+    LOG_COST_QUEUE_MAXSIZE: int = 8192
 
     # ------------------------------
     # MySQL

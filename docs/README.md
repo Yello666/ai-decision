@@ -14,7 +14,7 @@
 |------|-----------|--------------------------------------------------------|---------------|
 | 用户信息设置 | Shopify OAuth / 本地注册、商户资料、**品牌信息**（用于热点匹配）、商品同步或本地上传 | `/auth`、`/merchant`、`/products`、`/local-products`、`/upload` | `app/services/auth_service`、`merchant_service`、`product_service` |
 | 动态调价 | 基于竞品与规则的分析，生成调价建议（可对接 Agent 工作流） | `/pricing-analyze` | `app/services/pricing_service`、`app/skills/fetch_competitor_info`、`app/skills/pricing_rules` |
-| 热点内容生成 | 热点采集与缓存、LLM 清洗/分析、**品牌–热点匹配度**、脚本多轮打磨、**SSE 进度**、Seedance 视频任务 | `/hotspot`、`/video-thread`、`/generations`、`/video-tasks`、`/seedance2` | `app/services/hotspot_service`、`generation_service`、`video_thread_service`、`seedance_service` |
+| 热点内容生成 | 热点采集与缓存、LLM 清洗/分析、**品牌–热点匹配度**、脚本多轮打磨、**SSE 进度**、Seedance 视频任务 | `/hotspot`（含 `POST /hotspot/tiktok/hashtag`）、`/own-hotspot`、`/tiktok`、`/video-thread`、`/generations`、`/video-tasks`、`/seedance2` | `app/services/hotspot_service`、`generation_service`、`video_thread_service`、`seedance_service` |
 
 ---
 
@@ -53,11 +53,18 @@ Shopify / 独立前端
 
 ### 3.3 热点内容生成
 
-- **热点采集**：`app/services/hotspot_service/collect_hostspot.py`、`get_youtube_trends.py` 等；列表接口 `app/api/v1/hotspot.py` 通过 `get_hot_trends_cached` 减轻慢 API 压力。
-- **LLM 分析 / 匹配**：`analyse_matching_degree.py`（批匹配、多维度分数与营销建议）、`analysis_cache.py`、`match_cache.py`。
-- **推荐与邮件**：`recommended_hotspots.py`、`recommend_prefs.py`、`recommend_email*.py`、定时器 `recommend_email_scheduler.py`。
-- **视频脚本多轮对话**：LangGraph 图定义 `video_graph/graph.py`，节点实现 `video_graph/nodes.py`，状态 `state.py`，SSE `event_bus.py` 与 `app/api/v1/video_thread.py` 的 `stream`。
-- **视频生成**：`app/services/seedance_service/seedance2.py`、回调 `video_thread_service/task_callbacks.py`，任务查询 `app/api/v1/video_tasks.py`、`app/api/v1/seedance2.py`。
+- **YouTube 等全量缓存热点**：`collect_hostspot.py` + `get_youtube_trends.py`；分页列表 `POST /hotspot/hot-trends`（`hotspot.py`）经 `get_hot_trends_cached` 减轻慢数据源与 LLM 压力。
+- **TikTok Hashtag 热点**：`get_tiktok_trends.py`，入口 `POST /hotspot/tiktok/hashtag`（与同文件中的 YouTube 列表分离）；另有一套面向「搜索 / 主页 / hashtag」视频的通用 TikTok HTTP：`app/api/v1/tiktok.py`。
+- **商户自有热点**：`app/api/v1/own_hotspot.py`（`/own-hotspot`）与 `hotspot_service/own_hotspot.py`，与全局 YouTube 缓存隔离、按商户维度存储与推荐。
+- **LLM 分析 / 匹配**：`analyse_matching_degree.py`（批匹配、多维度分数与营销建议）；热点分析缓存 `analysis_cache.py`、匹配缓存 `match_cache.py`。热点采集侧的 LLM 清洗与 `analyze_collect_trend_items_async` 等均可能写入用量日志（见下）。
+- **推荐与邮件**：`recommended_hotspots.py`、`recommend_prefs.py`、`recommend_email.py`、定时器 `recommend_email_scheduler.py`。
+- **视频脚本多轮对话**：LangGraph `video_graph/graph.py`、`nodes.py`、`state.py`；SSE `event_bus.py` 与 `app/api/v1/video_thread.py` 的 `stream`。
+- **视频生成**：`seedance_service/seedance2.py`、回调 `video_thread_service/task_callbacks.py`；HTTP `app/api/v1/video_tasks.py`、`app/api/v1/seedance2.py`。
+
+### 3.4 日志与用量成本记录
+
+- **应用日志**：`app/core/logger.py` 中 `configure_logging()` 在进程启动与 `lifespan` 内调用（见 `main.py`）。控制台与可选文件日志使用 **北京时间**；文件落盘为 `logs/YYYY-MM-DD/YYYY-MM-DD-NN.log` 形式，单日按 `LOG_FILE_MAX_BYTES` 递增序号轮转。可通过 `LOG_FILE_ENABLED`、`LOG_FILE_DIR`、`LOG_LEVEL` 等环境变量控制（定义见 `app/core/config.py`）。
+- **成本 / token 专用日志**：`app/core/cost_log.py` 写入独立 logger **`cost`**（不汇入 root）：LLM（`log_llm_usage`，用于热点采集、品牌匹配、`video_graph/llm_utils` 等）与 Seedance（`try_log_seedance_usage`，成功任务且带回 `usage` 时；Redis NX 防抖重复记账）。启用文件日志时，cost 条目写入 **`logs/cost/`** 下同名按日轮转规则，并经 **队列 + 后台写盘线程**（`LOG_COST_QUEUE_MAXSIZE`）降低并发写锁竞争。应用在 `lifespan` 结束时调用 **`shutdown_cost_queue_logging()`** 排空队列。
 
 ---
 
@@ -67,6 +74,7 @@ Shopify / 独立前端
 2. `app/api/v1/__init__.py`（全站路由清单）
 3. 按任务深入：`app/services/<模块>/` 与对应 `app/api/v1/<模块>.py`
 4. 数据表：`db/migrations/*.sql` 与 `app/models/*.py`
+5. 日志与用量：`app/core/logger.py`、`app/core/cost_log.py`
 
 ---
 

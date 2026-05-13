@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Hotspot
 from app.core.config import get_settings
+from app.core.cost_log import log_llm_usage
 from app.schemas.hotspot import (
     HotspotMatchResponse,
     TrendObject,
@@ -223,6 +224,11 @@ async def _llm_match_single_brand_async(
         ],
         temperature=0.0,
         response_format={"type": "json_object"},
+    )
+    log_llm_usage(
+        "LLM热点匹配",
+        response.usage if hasattr(response, "usage") else None,
+        model=llm_model,
     )
     content = response.choices[0].message.content
     if not content:

@@ -1,9 +1,9 @@
 """
 Seedance 2.0 视频生成 API 路由。
 
-端点:
-  POST /generations/seedance2/video           创建视频生成任务
-  GET  /generations/seedance2/video/{task_id}  查询任务状态
+端点（相对 `API_V1_PREFIX`，默认 `/api/v1`）:
+  POST /seedance2/video                 创建视频生成任务
+  GET  /seedance2/video/{task_id}       查询任务状态
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from app.services.seedance_service import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/generations/seedance2", tags=["seedance2"])
+router = APIRouter(prefix="/seedance2", tags=["seedance2"])
 
 
 def _upstream_error_detail(exc: httpx.HTTPStatusError) -> Any:
@@ -35,7 +35,7 @@ def _upstream_error_detail(exc: httpx.HTTPStatusError) -> Any:
 
 
 # ----------------------------------------------------------
-# POST /generations/seedance2/video
+# POST /seedance2/video
 # 创建 Seedance 2.0 视频生成任务（异步任务，立即返回 task_id）
 # ----------------------------------------------------------
 @router.post("/video", response_model=dict)
@@ -50,7 +50,7 @@ async def generate_seedance2_video(payload: Seedance2VideoRequest):
     - `multimodal_reference`: 多模态参考生视频，支持 0~9 图 + 0~3 视频 + 0~3 音频
 
     **异步任务:** 提交后返回 task_id，使用
-    `GET /generations/seedance2/video/{task_id}` 轮询状态。
+    `GET /seedance2/video/{task_id}` 轮询状态。
 
     **提示词格式（多模态参考模式）:** 使用 [图1][图2][图3][音频1][视频1] 格式
     在提示词内明确说明每个素材的用途、动作、画面逻辑。
@@ -77,8 +77,8 @@ async def generate_seedance2_video(payload: Seedance2VideoRequest):
 
 
 # ----------------------------------------------------------
-# GET /generations/seedance2/video/{task_id}
-# 查询任务状态（轮询直到终态）
+# GET /seedance2/video/{task_id}
+# 查询任务状态（单次查询，轮询由客户端控制）
 # ----------------------------------------------------------
 @router.get("/video/{task_id}", response_model=dict)
 async def get_seedance2_video_task(task_id: str):

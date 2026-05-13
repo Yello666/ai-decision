@@ -11,6 +11,7 @@ from jose import JWTError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.cost_log import try_log_seedance_usage
 from app.core.security import decode_access_token
 from app.db.redis import get_redis_client
 from app.models import Generation
@@ -29,6 +30,10 @@ async def process_video_task_callback(payload: VideoTaskCallbackRequest, db: Ses
     task_id = payload.id
     status = payload.status
     logger.info("收到方舟回调: task_id=%s, status=%s", task_id, status)
+
+    if status == "succeeded" and payload.usage is not None:
+        usage_dict = payload.usage.model_dump()
+        await try_log_seedance_usage(task_id, status, usage_dict)
 
     video_url = payload.content.video_url if payload.content and payload.content.video_url else None
     error_msg = payload.error.message if payload.error and payload.error.message else None
@@ -106,6 +111,26 @@ def get_generation_by_external_id(db: Session, external_id: str) -> Optional[Gen
     )
 
 
+def find_pending_segment_generation(
+    db: Session, thread_id: str, segment_id: int
+) -> Optional[Generation]:
+    """串行链在 respond 节点预创建的占位记录：external_id 为空且 status=queued。"""
+    if not thread_id or not isinstance(segment_id, int):
+        return None
+    return (
+        db.query(Generation)
+        .filter(
+            Generation.thread_id == thread_id,
+            Generation.segment_id == segment_id,
+            Generation.type == "video",
+            Generation.external_id.is_(None),
+            Generation.status == "queued",
+        )
+        .order_by(Generation.id.desc())
+        .first()
+    )
+
+
 def handle_video_task_callback(
     db: Session,
     task_id: str,
@@ -116,14 +141,14 @@ def handle_video_task_callback(
 ) -> Optional[Generation]:
     """
     处理方舟平台视频任务回调，更新 Generation 记录状态。
-    幂等设计：已处于终态（succeeded/failed/expired）的记录不再更新。
+    幂等设计：已处于终态（succeeded/failed/expired/cancelled）的记录不再更新。
     """
     gen = get_generation_by_external_id(db, task_id)
     if not gen:
         logger.warning("回调找不到对应的 Generation 记录, task_id=%s", task_id)
         return None
 
-    terminal_statuses = {"succeeded", "failed", "expired"}
+    terminal_statuses = {"succeeded", "failed", "expired", "cancelled"}
     if gen.status in terminal_statuses:
         logger.info(
             "Generation(id=%s) 已处于终态 '%s'，忽略重复回调 status='%s'",
@@ -155,6 +180,11 @@ def handle_video_task_callback(
         logger.warning(
             "任务超时: Generation(id=%s)", gen.id,
         )
+    elif status == "cancelled":
+        gen.error_message = error_message or "任务已取消"
+        logger.warning(
+            "任务取消: Generation(id=%s)", gen.id,
+        )
 
     db.commit()
     db.refresh(gen)
@@ -162,8 +192,10 @@ def handle_video_task_callback(
 
 
 
-async def _update_task_results_in_graph(thread_id: str, new_result: dict) -> None:
-    """将新的 task_result 追加到 graph state，便于查询时看到所有段的 task_id。"""
+async def _upsert_task_result_in_graph(thread_id: str, result: dict) -> None:
+    """按 segment_id 合并/替换 graph state 中的 task_result（与 respond 预占位对齐，避免重复段）。"""
+    if not thread_id or not isinstance(result, dict):
+        return
     try:
         from app.services.video_thread_service.video_graph.graph import get_graph
 
@@ -171,10 +203,21 @@ async def _update_task_results_in_graph(thread_id: str, new_result: dict) -> Non
         config = {"configurable": {"thread_id": thread_id}}
         snapshot = await graph.aget_state(config)
         current_results = list((snapshot.values or {}).get("task_results", []))
-        current_results.append(new_result)
-        await graph.aupdate_state(config, {"task_results": current_results})
+        sid = result.get("segment_id")
+        new_results: list[dict] = []
+        replaced = False
+        for tr in current_results:
+            row = dict(tr)
+            if isinstance(sid, int) and row.get("segment_id") == sid:
+                new_results.append({**row, **result})
+                replaced = True
+            else:
+                new_results.append(row)
+        if not replaced:
+            new_results.append(dict(result))
+        await graph.aupdate_state(config, {"task_results": new_results})
     except Exception:
-        logger.warning("更新 graph state task_results 失败: thread_id=%s", thread_id)
+        logger.warning("upsert graph state task_results 失败: thread_id=%s", thread_id, exc_info=True)
 
 
 async def _patch_task_result_last_frame_in_graph(
@@ -319,21 +362,35 @@ async def _append_failed_chain_results(
     if not remaining:
         return
     failed_results: list[dict] = []
-    for seg in remaining:
-        gen = Generation(
-            shopify_store_id=chain_data.get("store_id", ""),
-            type="video",
-            status="failed",
-            thread_id=thread_id or None,
-            prompt_used=seg.get("description", ""),
-            trend_snapshot=chain_data.get("trend"),
-            brand_snapshot=chain_data.get("brand"),
-            external_id=f"skipped-{int(time.time() * 1000)}-{seg.get('segment_id')}",
-            error_message=error_message,
-        )
-        db.add(gen)
-        db.commit()
-        db.refresh(gen)
+    for idx, seg in enumerate(remaining):
+        sid = seg.get("segment_id")
+        ext_placeholder = f"skipped-{int(time.time() * 1000)}-{sid}-{idx}"
+        gen = None
+        if thread_id and isinstance(sid, int):
+            gen = find_pending_segment_generation(db, thread_id, sid)
+        if gen:
+            gen.status = "failed"
+            gen.error_message = error_message
+            if not gen.external_id:
+                gen.external_id = ext_placeholder
+            db.commit()
+            db.refresh(gen)
+        else:
+            gen = Generation(
+                shopify_store_id=chain_data.get("store_id", ""),
+                type="video",
+                status="failed",
+                thread_id=thread_id or None,
+                segment_id=sid if isinstance(sid, int) else None,
+                prompt_used=seg.get("description", ""),
+                trend_snapshot=chain_data.get("trend"),
+                brand_snapshot=chain_data.get("brand"),
+                external_id=ext_placeholder,
+                error_message=error_message,
+            )
+            db.add(gen)
+            db.commit()
+            db.refresh(gen)
         failed_results.append({
             "segment_id": seg.get("segment_id"),
             "task_id": gen.external_id,
@@ -344,7 +401,7 @@ async def _append_failed_chain_results(
         })
     if thread_id:
         for result in failed_results:
-            await _update_task_results_in_graph(thread_id, result)
+            await _upsert_task_result_in_graph(thread_id, result)
 
 
 async def continue_sequential_chain(db: Session, completed_task_id: str, continuity_image_url: str) -> None:
@@ -413,19 +470,31 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, continu
         )
         return
 
-    gen = Generation(
-        shopify_store_id=chain_data.get("store_id", ""),
-        type="video",
-        status="queued",
-        thread_id=thread_id or None,
-        prompt_used=next_seg.get("description", ""),
-        trend_snapshot=chain_data.get("trend"),
-        brand_snapshot=chain_data.get("brand"),
-        external_id=new_task_id,
-    )
-    db.add(gen)
-    db.commit()
-    db.refresh(gen)
+    next_sid = next_seg.get("segment_id")
+    gen = None
+    if thread_id and isinstance(next_sid, int):
+        gen = find_pending_segment_generation(db, thread_id, next_sid)
+    if gen:
+        gen.external_id = new_task_id
+        gen.status = "queued"
+        gen.prompt_used = next_seg.get("description", "")
+        db.commit()
+        db.refresh(gen)
+    else:
+        gen = Generation(
+            shopify_store_id=chain_data.get("store_id", ""),
+            type="video",
+            status="queued",
+            thread_id=thread_id or None,
+            segment_id=next_sid if isinstance(next_sid, int) else None,
+            prompt_used=next_seg.get("description", ""),
+            trend_snapshot=chain_data.get("trend"),
+            brand_snapshot=chain_data.get("brand"),
+            external_id=new_task_id,
+        )
+        db.add(gen)
+        db.commit()
+        db.refresh(gen)
 
     logger.info(
         "串行续传: 已提交 segment=%s, new_task_id=%s, generation_id=%s",
@@ -445,7 +514,7 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, continu
         new_task_result["last_frame_url"] = submit_lf
 
     if thread_id:
-        await _update_task_results_in_graph(thread_id, new_task_result)
+        await _upsert_task_result_in_graph(thread_id, new_task_result)
         await publish_event(thread_id, "segment_submitted", {
             "segment_id": next_seg.get("segment_id"),
             "task_id": new_task_id,

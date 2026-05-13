@@ -12,8 +12,9 @@ class Generation(Base):
     shopify_store_id = Column(String(64), index=True, nullable=False)  # 所属店铺，多租户隔离
 
     type = Column(String(16), nullable=False, index=True)  # video | text
-    status = Column(String(32), nullable=False, default="pending", index=True)  # queued | running | succeeded | failed | expired | canceled
+    status = Column(String(32), nullable=False, default="queued", index=True)  # queued | running | succeeded | failed | expired | canceled
     thread_id = Column(String(64), nullable=True, index=True)  # 所属视频生成会话 ID（仅视频 thread 任务有值）
+    segment_id = Column(Integer, nullable=True, index=True)  # 分镜段 ID（与 LangGraph task_results 对齐；串行链预创建占位记录时使用）
 
     prompt_used = Column(Text, nullable=False)  # 实际发给模型/API 的 prompt
     trend_snapshot = Column(JSON, nullable=True)   # TrendObject 快照

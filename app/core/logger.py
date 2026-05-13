@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import logging
+import queue
 from datetime import datetime, timedelta, timezone
+from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .config import get_settings
+
+
+def _beijing_format_time(record: logging.LogRecord, tz, datefmt: str | None = None) -> str:
+    dt = datetime.fromtimestamp(record.created, tz=tz)
+    if datefmt:
+        return dt.strftime(datefmt)
+    return f"{dt.strftime('%Y-%m-%d %H:%M:%S')},{int(record.msecs):03d}"
 
 
 def _beijing_tz():
@@ -17,6 +26,21 @@ def _beijing_tz():
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+# cost 专用：主线程/协程只入队，后台线程写盘，减轻高并发下文件锁与 I/O 阻塞
+_cost_queue_listener: QueueListener | None = None
+
+
+def _stop_cost_queue_listener() -> None:
+    global _cost_queue_listener
+    if _cost_queue_listener is not None:
+        _cost_queue_listener.stop()
+        _cost_queue_listener = None
+
+
+def shutdown_cost_queue_logging() -> None:
+    """应用退出时排空 cost 队列并停止写盘线程（见 main.py lifespan）。"""
+    _stop_cost_queue_listener()
+
 
 class BeijingFormatter(logging.Formatter):
     """日志时间 %(asctime)s 使用北京时间。"""
@@ -26,11 +50,45 @@ class BeijingFormatter(logging.Formatter):
         self._tz = _beijing_tz()
 
     def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
-        dt = datetime.fromtimestamp(record.created, tz=self._tz)
-        if datefmt:
-            return dt.strftime(datefmt)
-        # 与标准 logging 默认一致带毫秒，便于区分「已走北京时间」与未配置的 lastResort
-        return f"{dt.strftime('%Y-%m-%d %H:%M:%S')},{int(record.msecs):03d}"
+        return _beijing_format_time(record, self._tz, datefmt)
+
+
+def _patch_uvicorn_formatters() -> None:
+    """Uvicorn 默认 access/error 格式不含 %(asctime)s，补上北京时间前缀。"""
+    try:
+        from uvicorn.logging import AccessFormatter, DefaultFormatter
+    except ImportError:
+        return
+
+    class BeijingAccessFormatter(AccessFormatter):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._tz = _beijing_tz()
+
+        def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+            return _beijing_format_time(record, self._tz, datefmt)
+
+    class BeijingDefaultFormatter(DefaultFormatter):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._tz = _beijing_tz()
+
+        def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+            return _beijing_format_time(record, self._tz, datefmt)
+
+    access_fmt = '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
+    access_logger = logging.getLogger("uvicorn.access")
+    for h in access_logger.handlers:
+        old = h.formatter
+        use_colors = getattr(old, "use_colors", None) if isinstance(old, AccessFormatter) else None
+        h.setFormatter(BeijingAccessFormatter(fmt=access_fmt, use_colors=use_colors))
+
+    default_fmt = "%(asctime)s %(levelprefix)s %(message)s"
+    uvicorn_logger = logging.getLogger("uvicorn")
+    for h in uvicorn_logger.handlers:
+        old = h.formatter
+        use_colors = getattr(old, "use_colors", None) if isinstance(old, DefaultFormatter) else None
+        h.setFormatter(BeijingDefaultFormatter(fmt=default_fmt, use_colors=use_colors))
 
 
 class DailySizeRotatingFileHandler(logging.Handler):
@@ -135,6 +193,9 @@ _LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 
 def configure_logging() -> None:
     settings = get_settings()
+    if not settings.LOG_FILE_ENABLED:
+        _stop_cost_queue_listener()
+
     root = logging.getLogger()
     root.handlers.clear()
     root.setLevel(settings.LOG_LEVEL)
@@ -153,5 +214,27 @@ def configure_logging() -> None:
         )
         fh.setFormatter(formatter)
         root.addHandler(fh)
+
+        _stop_cost_queue_listener()
+
+        cost_logger = logging.getLogger("cost")
+        cost_logger.handlers.clear()
+        cost_logger.setLevel(settings.LOG_LEVEL)
+        cost_logger.propagate = False
+        cost_fh = DailySizeRotatingFileHandler(
+            log_root=_PROJECT_ROOT / "logs" / "cost",
+            max_bytes=int(settings.LOG_FILE_MAX_BYTES),
+        )
+        cost_fh.setFormatter(formatter)
+        qmax = max(1, int(settings.LOG_COST_QUEUE_MAXSIZE))
+        cost_queue: queue.Queue[logging.LogRecord] = queue.Queue(qmax)
+        global _cost_queue_listener
+        _cost_queue_listener = QueueListener(
+            cost_queue, cost_fh, respect_handler_level=True,
+        )
+        _cost_queue_listener.start()
+        cost_logger.addHandler(QueueHandler(cost_queue))
+
+    _patch_uvicorn_formatters()
 
     logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)

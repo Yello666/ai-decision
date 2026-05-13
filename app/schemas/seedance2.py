@@ -77,7 +77,7 @@ Seedance2ContentItem = Union[
 
 
 # ====================================================================
-# POST /generations/seedance2/video — 请求体
+# POST /api/v1/seedance2/video — 请求体
 # ====================================================================
 
 class Seedance2VideoRequest(BaseModel):

@@ -1015,6 +1015,14 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
                 "Seedance2 串行链条已存入 Redis: task_id=%s, 剩余 %d 段",
                 task_id, len(segments) - 1,
             )
+            # 后续段在 Respond 节点落库占位；此处先把各段写入 graph task_results，避免只保留首段。
+            for seg in segments[1:]:
+                submitted_results.append({
+                    "segment_id": seg.get("segment_id"),
+                    "task_id": "",
+                    "status": "pending_chain",
+                    "prompt": seg.get("description", ""),
+                })
     except Exception:
         logger.exception("Seedance2 首段任务提交失败")
         fail_row: dict[str, Any] = {
@@ -1022,6 +1030,7 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
             "task_id": "",
             "status": "failed",
             "prompt": first_seg.get("description", ""),
+            "error_message": "首段视频提交失败",
         }
         if submit_lf:
             fail_row["last_frame_url"] = submit_lf
@@ -1072,43 +1081,76 @@ async def respond(state: VideoGenerationState) -> dict[str, Any]:
     thread_id = state.get("thread_id", "")
     trend = state.get("trend", {})
     brand = state.get("brand", {})
-    segments = state.get("script_segments", [])
-
-    prompt_summary = "\n---\n".join(
-        f"[Segment {s.get('segment_id', '?')}] {s.get('description', '')}"
-        for s in segments
-    )
-
-    generation_ids = []
 
     db = SessionLocal()
     try:
         for tr in task_results:
-            if not tr.get("task_id"):
-                continue
             if tr.get("generation_id"):
                 continue
-            gen = Generation(
-                shopify_store_id=store_id,
-                type="video",
-                status="queued",
-                thread_id=thread_id or None,
-                prompt_used=tr.get("prompt", ""),
-                trend_snapshot=trend,
-                brand_snapshot=brand,
-                external_id=tr["task_id"],
+            sid = tr.get("segment_id")
+            if not isinstance(sid, int):
+                continue
+            prompt_used = str(tr.get("prompt", "") or "")
+            task_id = str(tr.get("task_id") or "").strip()
+            tr_status = tr.get("status") or ""
+
+            gen = (
+                db.query(Generation)
+                .filter(
+                    Generation.shopify_store_id == store_id,
+                    Generation.thread_id == thread_id,
+                    Generation.segment_id == sid,
+                    Generation.type == "video",
+                )
+                .order_by(Generation.id.desc())
+                .first()
             )
-            db.add(gen)
+            if gen is None:
+                gen = Generation(
+                    shopify_store_id=store_id,
+                    type="video",
+                    status="queued",
+                    thread_id=thread_id or None,
+                    segment_id=sid,
+                    prompt_used=prompt_used,
+                    trend_snapshot=trend,
+                    brand_snapshot=brand,
+                )
+                db.add(gen)
+
+            gen.prompt_used = prompt_used
+            gen.trend_snapshot = trend
+            gen.brand_snapshot = brand
+            gen.result_url = None
+            gen.result_text = None
+            gen.error_message = None
+
+            if task_id:
+                gen.status = "queued"
+                gen.external_id = task_id
+                notify_status = "queued"
+            elif tr_status == "pending_chain":
+                gen.status = "queued"
+                gen.external_id = None
+                notify_status = "queued"
+            elif tr_status == "failed":
+                gen.status = "failed"
+                gen.external_id = None
+                gen.error_message = str(tr.get("error_message") or "视频任务提交失败")
+                notify_status = "failed"
+            else:
+                continue
+
             db.commit()
             db.refresh(gen)
-            generation_ids.append(gen.id)
             tr["generation_id"] = gen.id
 
             try:
                 await publish_generation_status(
                     store_id=store_id,
                     generation_id=gen.id,
-                    status="queued",
+                    status=notify_status,
+                    error_message=gen.error_message if gen.status == "failed" else None,
                 )
             except Exception:
                 logger.warning("WS 推送初始状态失败: generation_id=%s", gen.id)

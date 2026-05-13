@@ -24,6 +24,7 @@ from typing import Any
 import httpx
 
 from app.core.config import get_settings
+from app.core.cost_log import try_log_seedance_usage
 from app.schemas.seedance2 import Seedance2VideoRequest
 
 logger = logging.getLogger(__name__)
@@ -322,7 +323,13 @@ async def query_video_task(task_id: str) -> dict[str, Any]:
         )
         resp.raise_for_status()
 
-    return resp.json()
+    data = resp.json()
+    raw_usage = data.get("usage")
+    usage_dict = raw_usage if isinstance(raw_usage, dict) else None
+    tid = str(data.get("id") or task_id)
+    st = str(data.get("status") or "")
+    await try_log_seedance_usage(tid, st, usage_dict)
+    return data
 
 
 async def poll_video_task(

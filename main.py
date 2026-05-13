@@ -1,5 +1,5 @@
 # 必须在导入其他会打日志的业务模块之前配置 root logging（含 Docker 下 uvicorn 子进程）
-from app.core.logger import configure_logging
+from app.core.logger import configure_logging, shutdown_cost_queue_logging
 
 configure_logging()
 
@@ -82,6 +82,7 @@ async def lifespan(app: FastAPI):
         scheduler.shutdown(wait=False)
         logger.info("热点推荐邮件定时器已关闭")
     await close_redis()
+    shutdown_cost_queue_logging()
 
 
 # 初始化 FastAPI

@@ -7,6 +7,7 @@ import httpx
 from openai import AsyncOpenAI
 
 from app.core.config import get_settings
+from app.core.cost_log import log_llm_usage
 from app.schemas.hotspot import (
     SentimentCN,
     CollectTrendObject
@@ -239,14 +240,6 @@ def _build_analysis_prompt(content_list: List[Dict[str, Any]]) -> str:
     """
 
 
-def _log_token_usage(usage) -> None:
-    if usage:
-        logger.info(
-            "Token 消耗（%s）: prompt=%d, completion=%d, total=%d",
-            LLM_MODEL, usage.prompt_tokens, usage.completion_tokens, usage.total_tokens,
-        )
-
-
 async def _analyze_with_llm_async(content_list: List[Dict[str, Any]]) -> Dict[str, Any]:
     """异步调用大模型对热点进行批量情感分析、风险评估和受众推断。"""
     prompt = _build_analysis_prompt(content_list)
@@ -258,7 +251,11 @@ async def _analyze_with_llm_async(content_list: List[Dict[str, Any]]) -> Dict[st
             response_format={"type": "json_object"},
             timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
         )
-        _log_token_usage(response.usage if hasattr(response, "usage") else None)
+        log_llm_usage(
+            "LLM热点过滤清洗",
+            response.usage if hasattr(response, "usage") else None,
+            model=LLM_MODEL,
+        )
         content = response.choices[0].message.content
         return json.loads(content)
     except Exception as e:

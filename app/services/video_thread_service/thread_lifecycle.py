@@ -248,7 +248,7 @@ def _db_list_generation_urls(thread_ids: list[str]) -> dict[str, list[str]]:
     """按 thread_id 批量取该 thread 下所有 succeeded 的视频 URL。
 
     - 仅选取 type=video & status=succeeded & result_url IS NOT NULL；
-    - 结果按 generations.created_at 升序，保持与 segment 提交顺序一致；
+    - 结果按 generations.segment_id 升序，保持与分镜顺序一致；
     - 未命中的 thread_id 不会出现在返回字典里。
     """
     if not thread_ids:
@@ -263,7 +263,7 @@ def _db_list_generation_urls(thread_ids: list[str]) -> dict[str, list[str]]:
                 Generation.status == "succeeded",
                 Generation.result_url.isnot(None),
             )
-            .order_by(Generation.created_at.asc())
+            .order_by(Generation.segment_id.asc(), Generation.created_at.asc())
             .all()
         )
         result: dict[str, list[str]] = {}

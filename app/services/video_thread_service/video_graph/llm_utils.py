@@ -16,6 +16,7 @@ import httpx
 from openai import AsyncOpenAI
 
 from app.core.config import get_settings
+from app.core.cost_log import log_llm_usage
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +263,12 @@ async def call_script_planner(
         **_chat_extra_kwargs(max_tokens=PLANNER_MAX_TOKENS),
     )
 
+    log_llm_usage(
+        "LLM生成视频脚本",
+        resp.usage if hasattr(resp, "usage") else None,
+        model=settings.LLM_MODEL_V4_DEEPSEEK,
+    )
+
     content = resp.choices[0].message.content if resp.choices else ""
     if not content:
         raise ValueError("LLM 返回空内容")
@@ -400,6 +407,12 @@ async def call_script_reviser(
         **_chat_extra_kwargs(max_tokens=REVISER_MAX_TOKENS),
     )
 
+    log_llm_usage(
+        "LLM重新生成视频脚本",
+        resp.usage if hasattr(resp, "usage") else None,
+        model=settings.LLM_MODEL_V4_DEEPSEEK,
+    )
+
     content = resp.choices[0].message.content if resp.choices else ""
     if not content:
         raise ValueError("LLM 修改返回空内容")
@@ -424,6 +437,11 @@ async def translate_to_english(text: str) -> str:
         temperature=0,
         **_chat_extra_kwargs(max_tokens=TRANSLATE_MAX_TOKENS),
     )
+    log_llm_usage(
+        "LLM视频脚本翻译",
+        resp.usage if hasattr(resp, "usage") else None,
+        model=settings.LLM_MODEL_36_PLUS,
+    )
     content = resp.choices[0].message.content if resp.choices else ""
     translated = (content or "").strip()
     if not translated:
@@ -447,6 +465,11 @@ async def translate_to_zh(text: str) -> str:
         ],
         temperature=0,
         **_chat_extra_kwargs(max_tokens=TRANSLATE_MAX_TOKENS),
+    )
+    log_llm_usage(
+        "LLM视频脚本翻译",
+        resp.usage if hasattr(resp, "usage") else None,
+        model=settings.LLM_MODEL_36_PLUS,
     )
     content = resp.choices[0].message.content if resp.choices else ""
     translated = (content or "").strip()
