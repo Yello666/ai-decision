@@ -1,4 +1,11 @@
+# 必须在导入其他会打日志的业务模块之前配置 root logging（含 Docker 下 uvicorn 子进程）
+from app.core.logger import configure_logging
+
+configure_logging()
+
 from contextlib import asynccontextmanager  # 新增：必须导入
+import logging
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,10 +20,8 @@ from app.core.exceptions import (
     http_exception_handler,
     validation_exception_handler,
 )
-from app.core.logger import configure_logging
 from app.core.hot_trends_cache import preload_hot_trends_cache
 from app.core.responses import success
-import logging
 from app.db.mysql import engine, db_url
 from app.db.postgres import (
     close_postgres_checkpointer,
@@ -29,13 +34,15 @@ from app.services.hotspot_service.collect_hostspot import collect_and_format_hot
 from app.services.hotspot_service.recommend_email_scheduler import create_recommend_email_scheduler
 
 settings = get_settings()
-configure_logging()
 logger = logging.getLogger(__name__)
 
 
 # 生命周期函数（启动+关闭）
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 兜底：uvicorn/worker 若在 load 之后又改过 logging，这里再挂载一次北京时间与 Handler
+    configure_logging()
+
     # 启动：创建数据库表 + 测试 Redis 连接
     logger.info("Database URL: %s", db_url)
     Base.metadata.create_all(bind=engine)

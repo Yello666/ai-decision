@@ -25,6 +25,22 @@ logger = logging.getLogger(__name__)
 
 _MATCH_PREFIX = "hotspot:match"
 
+# 与 analyse_matching_degree._build_match_response 必填字段一致；缺键的旧缓存 / 脏数据按未命中处理并重新拉 LLM
+_MATCH_CACHE_PAYLOAD_KEYS = frozenset(
+    {
+        "business_relevance",
+        "audience_overlap",
+        "brand_voice_fit",
+        "marketing_risk",
+        "suggestion",
+        "reason",
+    },
+)
+
+
+def _match_cache_payload_usable(obj: Any) -> bool:
+    return isinstance(obj, dict) and _MATCH_CACHE_PAYLOAD_KEYS.issubset(obj.keys())
+
 
 def _short_hash(raw: str) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
@@ -95,10 +111,21 @@ async def mget_match(
             miss_indices.append(idx)
             continue
         try:
-            hit_map[idx] = json.loads(raw)
+            parsed = json.loads(raw)
         except (TypeError, json.JSONDecodeError):
             logger.warning("匹配缓存反序列化失败, idx=%d，重新分析", idx)
             miss_indices.append(idx)
+            continue
+        if not _match_cache_payload_usable(parsed):
+            keys = sorted(parsed.keys()) if isinstance(parsed, dict) else None
+            logger.warning(
+                "匹配缓存结构无效（缺字段或与当前协议不一致）, idx=%d keys=%s，重新分析",
+                idx,
+                keys,
+            )
+            miss_indices.append(idx)
+            continue
+        hit_map[idx] = parsed
     return brand_fp, hit_map, miss_indices
 
 

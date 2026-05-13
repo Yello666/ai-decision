@@ -29,7 +29,8 @@ class BeijingFormatter(logging.Formatter):
         dt = datetime.fromtimestamp(record.created, tz=self._tz)
         if datefmt:
             return dt.strftime(datefmt)
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
+        # 与标准 logging 默认一致带毫秒，便于区分「已走北京时间」与未配置的 lastResort
+        return f"{dt.strftime('%Y-%m-%d %H:%M:%S')},{int(record.msecs):03d}"
 
 
 class DailySizeRotatingFileHandler(logging.Handler):

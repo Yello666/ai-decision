@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     HOT_TRENDS_ANALYSIS_VERSION: str = "v1"
     #热点与品牌匹配度计算7天过期（调用大模型对热点和品牌进行匹配度计算）
     HOT_TRENDS_MATCH_CACHE_TTL_SECONDS: int = 7 * 24 * 3600
-    HOT_TRENDS_MATCH_VERSION: str = "v1"
+    HOT_TRENDS_MATCH_VERSION: str = "v2"
 
     # ------------------------------
     # 邮件
