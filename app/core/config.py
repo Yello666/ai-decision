@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "AI Decision Platform"
     API_V1_PREFIX: str = "/api/v1"
     LOG_LEVEL: str = "INFO"
+    # 持久化日志：True 时将日志写入项目根下 LOG_FILE_DIR，并按天分子目录轮转
+    # 环境变量：LOG_FILE_ENABLED, LOG_FILE_DIR, LOG_FILE_MAX_BYTES
+    LOG_FILE_ENABLED: bool = True
+    LOG_FILE_DIR: str = "logs"
+    LOG_FILE_MAX_BYTES: int = 1048576  # 1 MiB，单文件超限后同一天递增 02、03...
 
     # ------------------------------
     # MySQL
