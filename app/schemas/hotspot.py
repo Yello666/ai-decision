@@ -5,7 +5,7 @@ from enum import Enum
 from typing import List, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
 
 
@@ -135,6 +135,27 @@ class PaginatedTrendResponse(BaseModel):
     page: int = Field(description="当前页码")
     page_size: int = Field(description="每页条数")
     total_pages: int = Field(description="总页数")
+
+
+class TikTokHashtagTrendRequest(BaseModel):
+    """按 TikTok Hashtag 抓取热点视频并分析为统一热点结构。"""
+
+    hashtags: List[str] = Field(..., min_length=1, description='Hashtag 列表，可有或无 #。示例：["fyp"]')
+    max_results: int = Field(default=10, ge=1, le=50, description="抓取视频个数，默认 10")
+    comments_per_post: int = Field(default=0, ge=0, le=10, description="每条视频显示的评论个数，默认 0")
+    max_replies_per_comment: int = Field(default=0, ge=0, le=3, description="每条评论的回复个数，默认 0")
+
+    @field_validator("hashtags")
+    @classmethod
+    def normalize_hashtags(cls, value: List[str]) -> List[str]:
+        normalized = [tag.strip().lstrip("#") for tag in value if tag and tag.strip()]
+        if not normalized:
+            raise ValueError("hashtags 不能为空")
+        return normalized
+
+
+class TikTokHashtagTrendResponse(RootModel[List[CollectTrendObject]]):
+    """TikTok Hashtag 热点列表响应，响应体本身是 CollectTrendObject 数组。"""
 
 
 class HotspotBatchMatchRequest(BaseModel):

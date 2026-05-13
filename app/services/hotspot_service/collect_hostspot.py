@@ -1,11 +1,10 @@
-import os
 import json
 import logging
 import asyncio
 from typing import List, Dict, Any
 
 import httpx
-from openai import OpenAI, AsyncOpenAI
+from openai import AsyncOpenAI
 
 from app.core.config import get_settings
 from app.schemas.hotspot import (
@@ -22,8 +21,29 @@ logger = logging.getLogger(__name__)
 settings=get_settings()
 LLM_MODEL = settings.LLM_MODEL_36_PLUS
 
+_FALLBACK_NO_LLM_MSG = (
+    "营销风控分析服务暂时不可用，以下为未经过模型审核的原始抓取数据，商业使用前请自行评估风险。"
+)
+
+
+def _with_llm_unavailable_notice(item: CollectTrendObject) -> CollectTrendObject:
+    extra = _FALLBACK_NO_LLM_MSG
+    if item.warning_message:
+        extra = f"{item.warning_message} {extra}"
+    return item.model_copy(update={"warning_message": extra})
+
+
 # proxy=None：强制不走系统/环境变量代理，避免全局代理干扰国内大模型请求
-ASYNC_LLM_CLIENT = AsyncOpenAI(base_url=settings.LLM_API_URL, api_key=settings.LLM_API_KEY, http_client=httpx.AsyncClient(proxy=None))
+def _llm_http_client() -> httpx.AsyncClient:
+    t = float(settings.LLM_REQUEST_TIMEOUT_SECONDS)
+    return httpx.AsyncClient(proxy=None, timeout=httpx.Timeout(t, connect=min(60.0, t)))
+
+
+ASYNC_LLM_CLIENT = AsyncOpenAI(
+    base_url=settings.LLM_API_URL,
+    api_key=settings.LLM_API_KEY,
+    http_client=_llm_http_client(),
+)
 
 BATCH_SIZE = 10
 
@@ -43,48 +63,112 @@ async def collect_and_format_hot_data_async(platforms: List[str], max_results: i
         process_list = youtube_trend_list[:max_results]
         if not process_list:
             continue
+        result.extend(await analyze_collect_trend_items_async(process_list))
+    return result
 
-        hit_map, miss_items = await mget_analysis(process_list)
-        logger.info(
-            "热点分析缓存 平台=%s 总数=%d 命中=%d 未命中=%d",
-            platform, len(process_list), len(hit_map), len(miss_items),
+
+async def analyze_collect_trend_items_async(items: List[CollectTrendObject]) -> List[CollectTrendObject]:
+    """
+    对已采集的热点做 LLM 分析并回填展示字段。
+
+    YouTube 与 TikTok 都产出 CollectTrendObject 初始对象后复用这里，缓存粒度仍由
+    platform/id/title/summary/tags 指纹控制。
+    """
+    if not items:
+        return []
+
+    hit_map, miss_items = await mget_analysis(items)
+    platform_names = ",".join(sorted({item.platform for item in items}))
+    logger.info(
+        "热点分析缓存 平台=%s 总数=%d 命中=%d 未命中=%d",
+        platform_names, len(items), len(hit_map), len(miss_items),
+    )
+
+    new_analysis_map: Dict[str, Dict[str, Any]] = {}
+    if miss_items:
+        batches = [miss_items[i:i + BATCH_SIZE] for i in range(0, len(miss_items), BATCH_SIZE)]
+        batch_payloads = [
+            [
+                {
+                    "id": item.id,
+                    "platform": item.platform,
+                    "title": item.title,
+                    "summary": item.summary,
+                    "tags": item.tags,
+                }
+                for item in batch
+            ]
+            for batch in batches
+        ]
+        batch_results_list = await asyncio.gather(
+            *[_analyze_with_llm_async(payload) for payload in batch_payloads],
+            return_exceptions=True,
+        )
+        for idx, batch_results in enumerate(batch_results_list):
+            if isinstance(batch_results, Exception):
+                logger.warning("Batch LLM analysis raised exception at batch index %d: %s", idx, batch_results)
+                continue
+            if not batch_results or "results" not in batch_results:
+                logger.warning("Batch LLM analysis failed or returned empty at batch index %d", idx)
+                continue
+            for res in batch_results["results"]:
+                rid = res.get("id")
+                # JSON 里 id 常为数字，与 CollectTrendObject.id（字符串）不一致会导致合并失败、接口返回 []
+                if rid is None or (isinstance(rid, str) and not rid.strip()):
+                    continue
+                new_analysis_map[str(rid).strip()] = res
+
+        if new_analysis_map:
+            await set_analysis_many(miss_items, new_analysis_map)
+
+    expected_ids = {item.id for item in items}
+    llm_ids = set(new_analysis_map.keys())
+    if miss_items and not new_analysis_map:
+        logger.warning(
+            "热点分析 LLM 批次未写入任何结果（可能 JSON 解析失败或返回空），待分析条数=%d",
+            len(miss_items),
+        )
+    elif miss_items and llm_ids and not (expected_ids & llm_ids):
+        logger.warning(
+            "热点分析 LLM 返回的 id 与输入不一致（将无法合并）。输入 id 样例=%s LLM id 样例=%s",
+            list(expected_ids)[:5],
+            list(llm_ids)[:5],
         )
 
-        new_analysis_map: Dict[str, Dict[str, Any]] = {}
-        if miss_items:
-            batches = [miss_items[i:i + BATCH_SIZE] for i in range(0, len(miss_items), BATCH_SIZE)]
-            batch_payloads = [
-                [
-                    {"id": item.id, "title": item.title, "summary": item.summary, "tags": item.tags}
-                    for item in batch
-                ]
-                for batch in batches
-            ]
-            batch_results_list = await asyncio.gather(
-                *[_analyze_with_llm_async(payload) for payload in batch_payloads],
-                return_exceptions=True,
-            )
-            for idx, batch_results in enumerate(batch_results_list):
-                if isinstance(batch_results, Exception):
-                    logger.warning("Batch LLM analysis raised exception at batch index %d: %s", idx, batch_results)
-                    continue
-                if not batch_results or "results" not in batch_results:
-                    logger.warning("Batch LLM analysis failed or returned empty at batch index %d", idx)
-                    continue
-                for res in batch_results["results"]:
-                    rid = res.get("id")
-                    if rid:
-                        new_analysis_map[rid] = res
+    result: List[CollectTrendObject] = []
+    skipped_no_analysis = 0
+    skipped_unsafe = 0
+    for item in items:
+        analysis_res = hit_map.get(item.id) or new_analysis_map.get(item.id)
+        if not analysis_res:
+            skipped_no_analysis += 1
+            continue
+        if _apply_analysis_to_item(item, analysis_res):
+            result.append(item)
+        else:
+            skipped_unsafe += 1
 
-            if new_analysis_map:
-                await set_analysis_many(miss_items, new_analysis_map)
-
-        for item in process_list:
-            analysis_res = hit_map.get(item.id) or new_analysis_map.get(item.id)
-            if not analysis_res:
-                continue
-            if _apply_analysis_to_item(item, analysis_res):
-                result.append(item)
+    logger.info(
+        "热点分析汇总 入参=%d 输出=%d 缓存命中键数=%d LLM新键数=%d 无分析跳过=%d 风控跳过=%d",
+        len(items),
+        len(result),
+        len(hit_map),
+        len(new_analysis_map),
+        skipped_no_analysis,
+        skipped_unsafe,
+    )
+    if result:
+        return result
+    if items and skipped_unsafe == 0:
+        logger.warning(
+            "热点分析无任何可用 LLM 结果且无非拒项，降级返回未过模型的原始条目（条数=%d）",
+            len(items),
+        )
+        return [_with_llm_unavailable_notice(i) for i in items]
+    if items:
+        logger.warning(
+            "热点分析产出为空列表：可能全部为风控拒绝，或 LLM/缓存异常"
+        )
     return result
 
 
@@ -96,6 +180,7 @@ def _apply_analysis_to_item(item: CollectTrendObject, analysis_res: Dict[str, An
             item.title, analysis_res.get("risk_category"),
         )
         return False
+    item.title = analysis_res.get("title", item.title)
     item.summary = analysis_res.get("summary", item.summary)
     item.tags = analysis_res.get("tags", item.tags)
     item.sentiment_label = _map_sentiment(analysis_res.get("sentiment_label", "中性"))
@@ -109,10 +194,10 @@ def _apply_analysis_to_item(item: CollectTrendObject, analysis_res: Dict[str, An
 
 def _build_analysis_prompt(content_list: List[Dict[str, Any]]) -> str:
     return f"""
- Role：电商营销风控专家。你将接收一组YouTube热点摘要列表（包含id, title, summary, tags），需逐一分析每个热点的商业机会与风险。 
+ Role：电商营销风控专家。你将接收一组社媒热点内容列表（包含id, platform, title, summary, tags；TikTok 的 summary 可能包含字幕、视频描述和评论），需逐一分析每个热点的商业机会与风险。 
  
  Analysis Rules (Apply to EACH item in the list):
- 1. 对热点进行总结，50-200字最佳；输出所给内容的summary和几个最主要的tags。
+ 1. 对热点进行总结，生成热点 title，并对热点进行总结，summary 50-200字最佳；输出所给内容的summary和几个最主要的tags。
  2. Sentiment Analysis:
     - Label: 正面/中性/负面（如果既不是正面，也不是负面，那就是中性；既包含正面，也包含负面，也是中性）
     - Score: -100.0 (极负) 到 100.0 (极正) 
@@ -132,6 +217,7 @@ def _build_analysis_prompt(content_list: List[Dict[str, Any]]) -> str:
  - Schema for EACH object in "results": 
  {{
     "id": "String (Copy exactly from input 'id')",
+    "title": "String (Short display title)",
     "summary": "String (Brief Summary)", 
     "tags": ["String", "String", ...],
     "sentiment_score": Float (-100.0 to 100.0), 
@@ -164,6 +250,7 @@ async def _analyze_with_llm_async(content_list: List[Dict[str, Any]]) -> Dict[st
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             response_format={"type": "json_object"},
+            timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
         )
         _log_token_usage(response.usage if hasattr(response, "usage") else None)
         content = response.choices[0].message.content
