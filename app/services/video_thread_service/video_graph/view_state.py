@@ -13,7 +13,8 @@ Mapper 保证：
   - status 由 current_step 确定性映射（running / waiting_human / finished / error）
   - progress 给出固定的里程碑百分比，前端可据此直接渲染进度条
   - message 是"已做人话翻译"的文案，业务层无需再写文案
-  - segments 只在 waiting_human / finished 时下发，且已做语言脱敏
+  - segments 在 waiting_human / finished 下发；在 waiting_video_results / video_results_ready
+    也会下发（只读），便于晚进入页面的用户仍能看到分镜清单与各段生成状态
 """
 from __future__ import annotations
 
@@ -40,15 +41,18 @@ class FrontendViewState(BaseModel):
     # --- 业务数据：按需下发 ---
     segments: Optional[list[dict]] = Field(
         default=None,
-        description="剧本分镜草稿，仅在 waiting_human / finished 阶段下发",
+        description="剧本分镜草稿；waiting_human / finished 下发；waiting_video_results 等也会只读下发",
     )
     total_duration: Optional[int] = None
     execution_strategy: Optional[Literal["parallel", "sequential"]] = None
     revision_count: Optional[int] = None
 
-    # --- 任务结果（finished）---
+    # --- 任务结果（审视频 / 等结果 / finished）---
     task_results: Optional[list[dict]] = None
+    video_results: Optional[list[dict]] = None
     final_status: Optional[str] = None
+    review_phase: Optional[str] = None
+    target_segment_ids: Optional[list[int]] = None
 
     # --- 错误详情（error）---
     error_detail: Optional[str] = None
@@ -83,6 +87,12 @@ _STEP_META: dict[str, tuple[FrontendStatus, int, str]] = {
     "assemble_and_submit_running": ("running",        85,  "正在向视频生成引擎提交任务…"),
     "submitted":                   ("running",        95,  "任务已提交，正在登记生成记录…"),
     "done":                        ("finished",       100, "视频生成任务已成功提交"),
+    # 视频结果审阅
+    "waiting_video_results":       ("running",        98,  "视频生成中，请稍候…"),
+    "video_results_ready":         ("running",        99,  "视频结果已生成，准备进入审阅…"),
+    "waiting_human_vd":             ("waiting_human",  100, "请审阅视频生成结果"),
+    "video_human_responded":        ("running",        100, "已收到您的视频审阅反馈，正在处理…"),
+    "finished":                    ("finished",       100, "视频结果已确认"),
     # 终态错误
     "error":                       ("error",          100, "任务执行失败"),
 }
@@ -148,6 +158,7 @@ def map_graph_state_to_view(
     config = state.get("parsed_config") or {}
     language = config.get("language", "zh")
     raw_segments = state.get("script_segments") or []
+    task_results = state.get("task_results", [])
 
     view = FrontendViewState(
         status=status,
@@ -155,6 +166,8 @@ def map_graph_state_to_view(
         progress=progress,
         current_step=step,
         revision_count=state.get("revision_count"),
+        review_phase=state.get("review_phase"),
+        target_segment_ids=state.get("target_segment_ids"),
     )
 
     # --- 3) 不同阶段按需下发业务数据 ---
@@ -164,16 +177,55 @@ def map_graph_state_to_view(
             state["total_duration"] if "total_duration" in state else 0
         )
         view.execution_strategy = state.get("execution_strategy", "parallel")
+        if step == "waiting_human_vd":
+            view.task_results = task_results
+            view.video_results = _format_video_results_for_view(raw_segments, task_results)
+    elif step in ("waiting_video_results", "video_results_ready"):
+        # running 态但需展示分镜与各段任务进度（含晚进入会话、无本地 segment 缓存时）
+        view.segments = format_segments_for_view(raw_segments, language)
+        view.total_duration = (
+            state["total_duration"] if "total_duration" in state else 0
+        )
+        view.execution_strategy = state.get("execution_strategy", "parallel")
+        view.task_results = task_results
+        view.video_results = _format_video_results_for_view(raw_segments, task_results)
     elif status == "finished":
         view.segments = format_segments_for_view(raw_segments, language)
         view.total_duration = (
             state["total_duration"] if "total_duration" in state else 0
         )
         view.execution_strategy = state.get("execution_strategy", "parallel")
-        view.task_results = state.get("task_results", [])
+        view.task_results = task_results
+        view.video_results = _format_video_results_for_view(raw_segments, task_results)
         view.final_status = state.get("final_status", "submitted")
 
     return view
+
+
+def _format_video_results_for_view(
+    segments: list[dict],
+    task_results: list[dict],
+) -> list[dict]:
+    """按 segment 汇总视频任务结果，供视频审阅 UI 直接渲染。"""
+    result_by_segment = {
+        item.get("segment_id"): item
+        for item in task_results or []
+        if item.get("segment_id") is not None
+    }
+    rows: list[dict] = []
+    for seg in segments or []:
+        sid = seg.get("segment_id")
+        task = result_by_segment.get(sid, {})
+        rows.append({
+            "segment_id": sid,
+            "task_id": task.get("task_id"),
+            "generation_id": task.get("generation_id"),
+            "status": task.get("status"),
+            "video_url": task.get("video_url"),
+            "error_message": task.get("error_message"),
+            "last_frame_url": task.get("last_frame_url"),
+        })
+    return rows
 
 
 __all__ = [

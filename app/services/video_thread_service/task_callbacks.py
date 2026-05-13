@@ -53,9 +53,41 @@ async def process_video_task_callback(payload: VideoTaskCallbackRequest, db: Ses
         error_message=gen.error_message,
     )
 
+    if gen.thread_id:
+        await _patch_task_result_status_in_graph(
+            gen.thread_id,
+            task_id,
+            status=gen.status,
+            video_url=gen.result_url or video_url or "",
+            error_message=gen.error_message or error_msg or "",
+        )
+        try:
+            from app.services.video_thread_service.video_graph.event_bus import publish_event
+
+            await publish_event(gen.thread_id, "video_result_updated", {
+                "task_id": task_id,
+                "generation_id": gen.id,
+                "status": gen.status,
+                "video_url": gen.result_url,
+                "error_message": gen.error_message,
+            })
+        except Exception:
+            logger.warning("推送视频审阅结果更新失败: thread_id=%s", gen.thread_id)
+
     if status == "succeeded":
         continuity_image_url = payload.content.last_frame_url if payload.content and payload.content.last_frame_url else ""
+        if gen.thread_id and payload.content and payload.content.last_frame_url:
+            await _patch_task_result_last_frame_in_graph(
+                gen.thread_id,
+                task_id,
+                payload.content.last_frame_url,
+            )
         await continue_sequential_chain(db, task_id, continuity_image_url)
+    elif status in {"failed", "expired", "cancelled"}:
+        await fail_remaining_sequential_chain(db, task_id, status)
+
+    if gen.thread_id:
+        await _maybe_resume_video_review(gen.thread_id)
 
     logger.info("回调处理完成: task_id=%s, generation_id=%s, status=%s", task_id, gen.id, gen.status)
     return {"received": True, "matched": True, "generation_id": gen.id}
@@ -145,6 +177,176 @@ async def _update_task_results_in_graph(thread_id: str, new_result: dict) -> Non
         logger.warning("更新 graph state task_results 失败: thread_id=%s", thread_id)
 
 
+async def _patch_task_result_last_frame_in_graph(
+    thread_id: str,
+    task_id: str,
+    last_frame_url: str,
+) -> None:
+    """任务成功回调时，把该 task 的尾帧输出 URL 写回 graph state 中对应 task_result。"""
+    url = (last_frame_url or "").strip()
+    if not thread_id or not task_id or not url:
+        return
+    try:
+        from app.services.video_thread_service.video_graph.graph import get_graph
+
+        graph = get_graph()
+        config = {"configurable": {"thread_id": thread_id}}
+        snapshot = await graph.aget_state(config)
+        current_results = list((snapshot.values or {}).get("task_results", []))
+        patched = False
+        new_results: list[dict] = []
+        for tr in current_results:
+            row = dict(tr)
+            if row.get("task_id") == task_id:
+                row["last_frame_url"] = url
+                patched = True
+            new_results.append(row)
+        if patched:
+            await graph.aupdate_state(config, {"task_results": new_results})
+    except Exception:
+        logger.warning(
+            "回写 task_results.last_frame_url 失败: thread_id=%s task_id=%s",
+            thread_id,
+            task_id,
+        )
+
+
+async def _patch_task_result_status_in_graph(
+    thread_id: str,
+    task_id: str,
+    *,
+    status: str,
+    video_url: str = "",
+    error_message: str = "",
+) -> None:
+    """回调时把视频任务状态/结果 URL 同步回 graph state，供视频审阅使用。"""
+    if not thread_id or not task_id:
+        return
+    try:
+        from app.services.video_thread_service.video_graph.graph import get_graph
+
+        graph = get_graph()
+        config = {"configurable": {"thread_id": thread_id}}
+        snapshot = await graph.aget_state(config)
+        current_results = list((snapshot.values or {}).get("task_results", []))
+        patched = False
+        new_results: list[dict] = []
+        for tr in current_results:
+            row = dict(tr)
+            if row.get("task_id") == task_id:
+                row["status"] = status
+                if video_url:
+                    row["video_url"] = video_url
+                if error_message:
+                    row["error_message"] = error_message
+                patched = True
+            new_results.append(row)
+        if patched:
+            await graph.aupdate_state(config, {"task_results": new_results})
+    except Exception:
+        logger.warning(
+            "回写 task_results 视频状态失败: thread_id=%s task_id=%s",
+            thread_id,
+            task_id,
+        )
+
+
+TERMINAL_VIDEO_STATUSES = {"succeeded", "failed", "expired", "cancelled"}
+
+
+def _video_results_ready(state: dict) -> bool:
+    segments = state.get("script_segments") or []
+    task_results = state.get("task_results") or []
+    latest_by_segment: dict[int, dict] = {}
+    for item in task_results:
+        sid = item.get("segment_id") if isinstance(item, dict) else None
+        if isinstance(sid, int):
+            latest_by_segment[sid] = item
+    for seg in segments:
+        sid = seg.get("segment_id") if isinstance(seg, dict) else None
+        if not isinstance(sid, int):
+            continue
+        task = latest_by_segment.get(sid)
+        if not task:
+            return False
+        if task.get("status") not in TERMINAL_VIDEO_STATUSES:
+            return False
+    return bool(segments)
+
+
+async def _maybe_resume_video_review(thread_id: str) -> None:
+    """所有视频任务进入终态后，自动恢复 graph 到视频审阅中断点。"""
+    if not thread_id:
+        return
+    try:
+        from langgraph.errors import GraphInterrupt
+        from langgraph.types import Command
+
+        from app.services.video_thread_service.thread_lifecycle import _persist_thread_snapshot
+        from app.services.video_thread_service.video_graph.graph import get_graph
+
+        graph = get_graph()
+        config = {"configurable": {"thread_id": thread_id}}
+        snapshot = await graph.aget_state(config)
+        state = snapshot.values or {}
+        if state.get("current_step") != "waiting_video_results":
+            return
+        if not _video_results_ready(state):
+            return
+
+        await graph.aupdate_state(config, {
+            "current_step": "video_results_ready",
+            "review_phase": "video",
+        })
+        try:
+            await graph.ainvoke(
+                Command(resume={"video_results_ready": True}),
+                config=config,
+            )
+        except GraphInterrupt:
+            await _persist_thread_snapshot(thread_id, workflow_ended=False)
+    except Exception:
+        logger.warning("自动进入视频审阅阶段失败: thread_id=%s", thread_id, exc_info=True)
+
+
+async def _append_failed_chain_results(
+    db: Session,
+    chain_data: dict,
+    remaining: list[dict],
+    error_message: str,
+) -> None:
+    thread_id = chain_data.get("thread_id", "")
+    if not remaining:
+        return
+    failed_results: list[dict] = []
+    for seg in remaining:
+        gen = Generation(
+            shopify_store_id=chain_data.get("store_id", ""),
+            type="video",
+            status="failed",
+            thread_id=thread_id or None,
+            prompt_used=seg.get("description", ""),
+            trend_snapshot=chain_data.get("trend"),
+            brand_snapshot=chain_data.get("brand"),
+            external_id=f"skipped-{int(time.time() * 1000)}-{seg.get('segment_id')}",
+            error_message=error_message,
+        )
+        db.add(gen)
+        db.commit()
+        db.refresh(gen)
+        failed_results.append({
+            "segment_id": seg.get("segment_id"),
+            "task_id": gen.external_id,
+            "generation_id": gen.id,
+            "status": "failed",
+            "prompt": seg.get("description", ""),
+            "error_message": error_message,
+        })
+    if thread_id:
+        for result in failed_results:
+            await _update_task_results_in_graph(thread_id, result)
+
+
 async def continue_sequential_chain(db: Session, completed_task_id: str, continuity_image_url: str) -> None:
     from app.services.video_thread_service.video_graph.event_bus import publish_event
 
@@ -177,7 +379,13 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, continu
             chain_data.get("config", {}),
             chain_data.get("media", {}),
             continuity_image_url=continuity_image_url,
+            end_frame_url=(chain_data.get("end_frame_by_segment") or {}).get(
+                str(next_seg.get("segment_id")),
+                "",
+            ),
         )
+        submit_lf = getattr(payload, "last_frame_url", None)
+        submit_lf = str(submit_lf).strip() if submit_lf else ""
         result = await create_seedance_video_task(payload)
         new_task_id = result.get("id", "")
         if not new_task_id:
@@ -185,12 +393,24 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, continu
             await publish_event(thread_id, "error", {
                 "message": f"串行续传 segment {next_seg.get('segment_id')} 提交未返回 task_id",
             })
+            await _append_failed_chain_results(
+                db,
+                chain_data,
+                remaining,
+                f"串行续传 segment {next_seg.get('segment_id')} 提交未返回 task_id",
+            )
             return
     except Exception:
         logger.exception("串行续传提交失败: segment=%s", next_seg.get("segment_id"))
         await publish_event(thread_id, "error", {
             "message": f"串行续传 segment {next_seg.get('segment_id')} 提交失败",
         })
+        await _append_failed_chain_results(
+            db,
+            chain_data,
+            remaining,
+            f"串行续传 segment {next_seg.get('segment_id')} 提交失败",
+        )
         return
 
     gen = Generation(
@@ -214,13 +434,15 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, continu
         gen.id,
     )
 
-    new_task_result = {
+    new_task_result: dict = {
         "segment_id": next_seg.get("segment_id"),
         "task_id": new_task_id,
         "generation_id": gen.id,
         "status": "queued",
         "prompt": next_seg.get("description", ""),
     }
+    if submit_lf:
+        new_task_result["last_frame_url"] = submit_lf
 
     if thread_id:
         await _update_task_results_in_graph(thread_id, new_task_result)
@@ -239,6 +461,36 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, continu
         await publish_generation_status(store_id=chain_data.get("store_id", ""), generation_id=gen.id, status="queued")
     except Exception:
         logger.warning("串行续传 WS 推送失败: generation_id=%s", gen.id)
+
+
+async def fail_remaining_sequential_chain(db: Session, failed_task_id: str, failed_status: str) -> None:
+    """串行链条中某段失败时，把后续未提交段标记为失败，避免等待节点永远挂起。"""
+    from app.services.video_thread_service.video_graph.event_bus import publish_event
+
+    redis_client = get_redis_client()
+    chain_key = f"seq_chain:{failed_task_id}"
+    chain_raw = await redis_client.get(chain_key)
+    if not chain_raw:
+        return
+    chain_data = json.loads(chain_raw)
+    await redis_client.delete(chain_key)
+
+    remaining = chain_data.get("remaining_segments", [])
+    thread_id = chain_data.get("thread_id", "")
+    if not remaining:
+        return
+
+    await _append_failed_chain_results(
+        db,
+        chain_data,
+        remaining,
+        f"前序视频任务 {failed_status}，后续串行段未提交",
+    )
+
+    if thread_id:
+        await publish_event(thread_id, "warning", {
+            "message": "前序视频生成失败，后续串行段已标记为失败",
+        })
 
 
 async def handle_generation_status_ws(websocket: WebSocket, token: Optional[str]) -> None:

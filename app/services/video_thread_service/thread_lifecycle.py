@@ -82,7 +82,7 @@ def _derive_status(state: dict, *, workflow_ended: bool) -> str:
         return "error"
     if workflow_ended:
         return "finished"
-    if current_step == "waiting_human":
+    if current_step in {"waiting_human", "waiting_human_vd"}:
         return "waiting_human"
     return "running"
 
@@ -606,17 +606,39 @@ async def resume_thread_task(
             generation_mode=payload.generation_mode,
         )
 
-    human_input = {
-        "human_action": payload.action,
-        "human_edited_segments": [s.model_dump(exclude_none=True) for s in payload.edited_segments],
-        "human_feedback": payload.feedback,
-    }
+    current_step = state.get("current_step")
+    if current_step == "waiting_human":
+        if payload.action not in {"approve", "edit", "feedback"}:
+            raise HTTPException(status_code=400, detail="invalid_script_review_action")
+        human_input = {
+            "human_action": payload.action,
+            "human_edited_segments": [s.model_dump(exclude_none=True) for s in payload.edited_segments],
+            "human_feedback": payload.feedback,
+        }
+        response_step = "human_responded"
+        response_message = "已收到您的反馈，正在处理…"
+        response_progress = 60
+    elif current_step == "waiting_human_vd":
+        if payload.action not in {"finished", "edit", "feedback", "regenerate"}:
+            raise HTTPException(status_code=400, detail="invalid_video_review_action")
+        human_input = {
+            "human_vd_action": payload.action,
+            "human_edited_segments": [s.model_dump(exclude_none=True) for s in payload.edited_segments],
+            "human_feedback": payload.feedback,
+            "target_segment_ids": payload.target_segment_ids,
+        }
+        response_step = "video_human_responded"
+        response_message = "已收到您的视频审阅反馈，正在处理…"
+        response_progress = 100
+    else:
+        raise HTTPException(status_code=409, detail="thread_not_waiting_for_human")
+
     # 标记状态回到 running，列表页能即时反映"用户已确认/反馈，正在推进"
     await asyncio.to_thread(
         _db_update_thread_snapshot,
         thread_id,
         status="running",
-        current_step="human_responded",
+        current_step=response_step,
         revision_count=None,
         error_message=None,
         completed=False,
@@ -633,9 +655,9 @@ async def resume_thread_task(
         "human_action": payload.action,
         "view": FrontendViewState(
             status="running",
-            message="已收到您的反馈，正在处理…",
-            progress=60,
-            current_step="human_responded",
+            message=response_message,
+            progress=response_progress,
+            current_step=response_step,
         ).model_dump(),
     }
 
@@ -898,6 +920,22 @@ def _build_turn_from_snapshot(
         )
         return turn, state_emitted_user_input, submitted_emitted, last_fp
 
+    vd_action = values.get("human_vd_action")
+    if (
+        step == "video_human_responded"
+        and prev_step != "video_human_responded"
+        and vd_action in ("finished", "edit", "feedback", "regenerate")
+    ):
+        turn = ThreadHistoryTurn(
+            kind="video_user_action",
+            action=vd_action,
+            human_feedback=values.get("human_feedback") or None,
+            human_edited_segments=values.get("human_edited_segments") or None,
+            target_segment_ids=values.get("target_segment_ids") or None,
+            **base_kwargs,
+        )
+        return turn, state_emitted_user_input, submitted_emitted, last_fp
+
     # 3) LLM / 编辑产出的一版可审阅草稿（plan_script、apply_edit、revise_script 均落在此 step）
     raw_segments = values.get("script_segments") or []
     if step == "plan_script_done" and isinstance(raw_segments, list) and raw_segments:
@@ -915,7 +953,7 @@ def _build_turn_from_snapshot(
             return turn, state_emitted_user_input, submitted_emitted, fp
 
     # 4) 已向 Seedance 提交（assemble_and_submit 返回值）
-    if not submitted_emitted and step == "submitted":
+    if step == "submitted" and (not submitted_emitted or prev_step == "video_human_responded"):
         turn = ThreadHistoryTurn(kind="submitted", **base_kwargs)
         return turn, state_emitted_user_input, True, last_fp
 
