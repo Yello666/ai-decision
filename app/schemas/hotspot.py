@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import List, Literal, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
@@ -56,6 +56,12 @@ class CollectTrendObject(BaseModel):
     jump_url: str = Field(..., description="跳转链接（视频/文字页面地址）")
     view_count: int = Field(..., description="播放/浏览量")
     likes: int = Field(..., description="点赞数")
+    # --以下为tiktok热点需要额外展示的信息--
+    comment_count: int = Field(default=0, description="评论数（如 TikTok；其它平台可为 0）")
+    share_count: int = Field(default=0, description="分享数")
+    collect_count: int = Field(default=0, description="收藏数")
+    author_followers: int = Field(default=0, description="作者粉丝数")
+    duration_seconds: float = Field(default=0.0, description="视频时长（秒）")
     publish_time: str = Field(..., description="发布时间（ISO格式，如：2026-02-12T10:00:00）")
     platform: str = Field(..., description="热点搜集平台，如Youtube")
 
@@ -137,6 +143,24 @@ class PaginatedTrendResponse(BaseModel):
     total_pages: int = Field(description="总页数")
 
 
+class TikTokSortChoice(BaseModel):
+    """TikTok 热点列表服务端排序选项（与分析完成后列表对齐；不做数值过滤）。"""
+
+    sort_by: Literal[
+        "diggs",
+        "play_count",
+        "comments",
+        "shares",
+        "collects",
+        "followers",
+        "duration",
+        "engagement_rate",
+        "create_time",
+    ] = Field(default="diggs", description="排序字段")
+    sort_order: Literal["asc", "desc"] = Field(default="desc", description="asc 升序 / desc 降序")
+    limit: int = Field(default=50, ge=1, le=500, description="排序后最多返回条数")
+
+
 class TikTokHashtagTrendRequest(BaseModel):
     """按 TikTok Hashtag 抓取热点视频并分析为统一热点结构。"""
 
@@ -144,6 +168,7 @@ class TikTokHashtagTrendRequest(BaseModel):
     max_results: int = Field(default=10, ge=1, le=50, description="抓取视频个数，默认 10")
     comments_per_post: int = Field(default=0, ge=0, le=10, description="每条视频显示的评论个数，默认 0")
     max_replies_per_comment: int = Field(default=0, ge=0, le=3, description="每条评论的回复个数，默认 0")
+    sort: TikTokSortChoice = Field(default_factory=TikTokSortChoice, description="排序选项")
 
     @field_validator("hashtags")
     @classmethod

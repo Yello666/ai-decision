@@ -82,13 +82,18 @@ async def collect_hashtag_trends(payload: TikTokHashtagTrendRequest):
     """
     按 TikTok Hashtag 抓取热点视频，返回 `CollectTrendObject` 列表。
 
-    当前仅支持 Hashtag 场景；排序和过滤后续再扩展。
+    分析完成后可按 ``sort.sort_by`` / ``sort.sort_order`` 排序，并用 ``sort.limit`` 截断（语义与
+    ``POST /tiktok/...`` 中的服务端排序一致；此处不做数值过滤）。
     """
     logger.info(
-        "hotspot /tiktok/hashtag 入参 hashtags=%s max_results=%s comments_per_post=%s",
+        "hotspot /tiktok/hashtag 入参 hashtags=%s max_results=%s comments_per_post=%s "
+        "sort_by=%s sort_order=%s limit=%s",
         payload.hashtags,
         payload.max_results,
         payload.comments_per_post,
+        payload.sort.sort_by,
+        payload.sort.sort_order,
+        payload.sort.limit,
     )
     try:
         out = await collect_tiktok_hashtag_trends_async(payload)
