@@ -194,43 +194,49 @@ def _apply_analysis_to_item(item: CollectTrendObject, analysis_res: Dict[str, An
 
 def _build_analysis_prompt(content_list: List[Dict[str, Any]]) -> str:
     return f"""
- Role：电商营销风控专家。你将接收一组社媒热点内容列表（包含id, platform, title, summary, tags；TikTok 的 summary 可能包含字幕、视频描述和评论），需逐一分析每个热点的商业机会与风险。 
- 
- Analysis Rules (Apply to EACH item in the list):
- 1. 对热点进行总结，生成热点 title，并对热点进行总结，summary 50-200字最佳；输出所给内容的summary和几个最主要的tags。
- 2. Sentiment Analysis:
-    - Label: 正面/中性/负面（如果既不是正面，也不是负面，那就是中性；既包含正面，也包含负面，也是中性）
-    - Score: -100.0 (极负) 到 100.0 (极正) 
- 3. Risk Category (Priority Logic):
-    按顺序匹配，命中即止： 
-    3.1 RED_LINE 绝对不可营销(is_safe_for_marketing=false): 
-       涉及内容：政治斗争、国家政策批评、地缘冲突、台湾问题、中国政治、霸权、谋杀、恐怖主义、儿童剥削、极端暴力、色情、爱泼斯坦案、重大自然灾害。
-    3.2 YELLOW_OPPORTUNITY 高商业潜力但需谨慎(is_safe_for_marketing=true): 
-       特征：行业质量危机、服务投诉、权益纠纷。公众愤怒但渴求市场替代方案。
-    3.3 GREEN_SAFE 低风险，可营销(is_safe_for_marketing=true): 
-       特征：正面新闻、知识科普、轻松有趣、自嘲式幽默、搞笑梗等。
- 4. Audience Inference: 推断3-5个具体的关注热点的人群标签 (如："18-35岁职场女性", "硬核科技粉")，拒绝泛词。
- 
- Output Format:
- - Strict JSON only. No markdown, no explanations. 
- - The output must be a JSON object containing a "results" key, which is a list of objects corresponding exactly to the input items.
- - Schema for EACH object in "results": 
- {{
-    "id": "String (Copy exactly from input 'id')",
-    "title": "String (Short display title)",
-    "summary": "String (Brief Summary)", 
-    "tags": ["String", "String", ...],
-    "sentiment_score": Float (-100.0 to 100.0), 
-    "sentiment_label": "String (正面、中性、负面)", 
-    "risk_category": "Enum[RED_LINE, YELLOW_OPPORTUNITY, GREEN_SAFE]", 
-    "is_safe_for_marketing": Boolean, 
-    "warning_message": "String", 
-    "audience": ["String", "String", ...] 
- }}
+    Role: 电商营销风控专家与数据清洗工程师。
+    Task: 你将接收一组社媒热点内容列表（包含 id, platform, title, summary, tags；注意：TikTok 的 summary 可能夹杂字幕、视频描述和评论），需过滤噪音，逐一分析每个热点的商业机会与风险。
+    Analysis Rules (Apply to EACH item in the list):
+    1. 内容提炼:
+       - 基于输入内容过滤噪音，重新生成精炼的热点标题 (title) 和 热点摘要 (summary，字数严格控制在 50-200 字)。
+       - 提取并输出 3-5 个最核心的标签 (tags)。
+    2. 情感分析:
+       - Label: 仅限 [正面, 中性, 负面]。如果情绪既不偏正也不偏负，或同时包含强烈的正负面情绪（争议大），均判定为“中性”。
+       - Score: -100.0 (极负) 到 100.0 (极正) 的浮点数。
+    3. 风控与营销定级 (Risk Category - Priority Logic):
+       按以下顺序匹配，命中即止：
+       3.1 RED_LINE -> 绝对不可营销 (is_safe_for_marketing=false):
+           涉及内容：政治斗争、国家政策批评、地缘冲突、台湾问题、中国政治、霸权、谋杀、恐怖主义、儿童剥削、极端暴力、色情、爱泼斯坦案、重大自然灾害等。
+           warning_message：请简述触发红线的具体原因。
+       3.2 YELLOW_OPPORTUNITY -> 高商业潜力但需谨慎 (is_safe_for_marketing=true):
+           特征：行业质量危机、友商服务投诉、消费者权益纠纷。公众愤怒但渴求市场替代方案。
+           warning_message：请提示营销切入时的注意事项（如：切忌拉踩、需强调自身品质等）。
+       3.3 GREEN_SAFE -> 低风险，安全可营销 (is_safe_for_marketing=true):
+           特征：正面新闻、知识科普、轻松有趣、自嘲式幽默、搞笑梗等。
+           warning_message：固定输出“无”。
+    4. 受众画像推断 (Audience Inference): 
+       推断 3-5 个具体的关注该热点的人群标签 (如："18-35岁职场女性", "硬核科技粉", "母婴成分党")，拒绝使用“网民”、“大众”等泛词。
 
- # Input Data 
- {json.dumps(content_list, ensure_ascii=False)}
-"""
+    Output Format:
+    - Strict JSON only. No markdown formatting (do not use ```json), no explanations.
+    - The output must be a JSON object containing a "results" key, which is a list of objects corresponding exactly to the input items.
+    - Schema for EACH object in "results": 
+    {{
+       "id": "String (Copy exactly from input 'id')",
+       "title": "String (Short display title)",
+       "summary": "String (Brief Summary, 50-200 words)", 
+       "tags": ["String", "String", ...],
+       "sentiment_score": Float (-100.0 to 100.0), 
+       "sentiment_label": "String (正面、中性、负面)", 
+       "risk_category": "String (Must be one of: RED_LINE, YELLOW_OPPORTUNITY, GREEN_SAFE)", 
+       "is_safe_for_marketing": Boolean, 
+       "warning_message": "String", 
+       "audience": ["String", "String", ...] 
+    }}
+
+    # Input Data 
+    {json.dumps(content_list, ensure_ascii=False)}
+    """
 
 
 def _log_token_usage(usage) -> None:
@@ -242,7 +248,7 @@ def _log_token_usage(usage) -> None:
 
 
 async def _analyze_with_llm_async(content_list: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """异步调用大模型进行批量情感分析、风险评估和受众推断。"""
+    """异步调用大模型对热点进行批量情感分析、风险评估和受众推断。"""
     prompt = _build_analysis_prompt(content_list)
     try:
         response = await ASYNC_LLM_CLIENT.chat.completions.create(

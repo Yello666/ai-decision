@@ -193,7 +193,7 @@ async def _llm_match_single_brand_async(
   "audience_overlap": Float,         // 0-100
   "brand_voice_fit": Float,          // 0-100
   "marketing_risk": Float,           // 0-100，越高风险越大
-  "suggestion": String,              // 若要借势该热点，建议从什么营销角度切入（一句话）
+  "suggestion": String,              // 若要借势该热点，建议从什么营销角度切入
   "reason": String,                  // 简短分析理由（为何给出上述分数）
   "risk_warning": String             // 可选：有明显风险时一两句风险提示；无则填空字符串 ""
 }}
