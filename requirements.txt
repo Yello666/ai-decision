@@ -10,8 +10,8 @@ cryptography==44.0.1
 # FastAPI 核心栈
 fastapi==0.115.8
 starlette==0.45.3
-pydantic
-pydantic-settings
+pydantic~=2.12.5
+pydantic-settings~=2.13.1
 uvicorn==0.34.0
 uvloop==0.21.0
 watchfiles==1.0.4
@@ -20,10 +20,10 @@ websockets==14.2
 # LangChain 生态 (严格对齐 0.3.x)
 langchain
 langchain-community
-langchain-openai
-langgraph
+langchain-openai~=1.1.9
+langgraph~=1.1.2
 langgraph-checkpoint-postgres
-openai
+openai~=2.2.0
 jiter==0.8.2
 dashscope
 
@@ -35,7 +35,7 @@ psycopg[binary,pool]>=3.2
 python-dotenv==1.0.1
 
 # 定时任务（热点推荐邮件等）；tzdata 供 zoneinfo 在非系统时区数据环境下使用
-APScheduler==3.10.4
+APScheduler~=3.11.2
 tzdata>=2024.1
 
 # 数据科学与算法
@@ -53,10 +53,16 @@ python-multipart==0.0.20
 python-jose==3.4.0
 jieba==0.42.1
 tavily-python==0.5.0
-serpapi
+serpapi~=1.0.2
+apify_client
 
 # 阿里云 OSS
-oss2
+oss2~=2.19.1
 
 #火山引擎sdk
 volcengine-python-sdk[ark]
+psycopg-pool~=3.3.0
+
+requests~=2.32.5
+langchain-core~=1.2.19
+typing_extensions~=4.15.0

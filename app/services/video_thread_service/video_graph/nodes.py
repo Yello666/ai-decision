@@ -1037,7 +1037,7 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
 # ──────────────────────────────────────────────
 async def respond(state: VideoGenerationState) -> dict[str, Any]:
     """
-    将提交结果写入数据库 Generation 表，并通过 WS 推送初始状态。
+    将提交结果写入数据库 Generation 表，并通过SSE推送初始状态。
     回调监听由已有的 /generate/callback 处理，不阻塞本节点。
     """
     from app.db.mysql import SessionLocal

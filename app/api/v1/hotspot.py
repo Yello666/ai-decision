@@ -1,3 +1,4 @@
+import logging
 import math
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -22,16 +23,21 @@ from app.schemas.hotspot import (
     HotspotTrendRequest,
     PaginatedTrendResponse,
     RecommendEmailScheduleMode,
+    TikTokHashtagTrendRequest,
+    TikTokHashtagTrendResponse,
 )
 from app.services.hotspot_service.analyse_matching_degree import (
     batch_match_hotspot_for_brand_async,
 )
 from app.services.hotspot_service.collect_hostspot import collect_and_format_hot_data_async
+from app.services.hotspot_service.get_tiktok_trends import collect_tiktok_hashtag_trends_async
 from app.services.hotspot_service.recommend_prefs import get_recommend_prefs, sync_recommend_prefs
 from app.services.hotspot_service.recommended_hotspots import build_recommended_hotspots
 from app.services.merchant_service import get_brand_by_merchant_id
 
 router = APIRouter(prefix="/hotspot", tags=["hotspot"])
+
+logger = logging.getLogger(__name__)
 
 # /recommend 固定与全量热点缓存同源：当前仅 YouTube；匹配模型与配置 LLM_MODEL_36_PLUS（/match 默认）一致。
 _RECOMMEND_PLATFORMS: list[str] = ["youtube"]
@@ -66,6 +72,38 @@ async def get_hot_trends(request: HotspotTrendRequest):
         msg = str(e).replace("\n", " ").replace("\\n", " ").strip()
         raise HTTPException(status_code=500, detail=f"获取热点数据失败：{msg}")
 
+# 获取tiktok hashtag有关的视频
+@router.post(
+    "/tiktok/hashtag",
+    response_model=TikTokHashtagTrendResponse,
+    summary="按 Hashtag 抓取 TikTok 热点并分析为统一热点结构",
+)
+async def collect_hashtag_trends(payload: TikTokHashtagTrendRequest):
+    """
+    按 TikTok Hashtag 抓取热点视频，返回 `CollectTrendObject` 列表。
+
+    分析完成后可按 ``sort.sort_by`` / ``sort.sort_order`` 排序，并用 ``sort.limit`` 截断（语义与
+    ``POST /tiktok/...`` 中的服务端排序一致；此处不做数值过滤）。
+    """
+    logger.info(
+        "hotspot /tiktok/hashtag 入参 hashtags=%s max_results=%s comments_per_post=%s "
+        "sort_by=%s sort_order=%s limit=%s",
+        payload.hashtags,
+        payload.max_results,
+        payload.comments_per_post,
+        payload.sort.sort_by,
+        payload.sort.sort_order,
+        payload.sort.limit,
+    )
+    try:
+        out = await collect_tiktok_hashtag_trends_async(payload)
+        logger.info("hotspot /tiktok/hashtag 完成 返回条数=%d", len(out))
+        return out
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        logger.exception("TikTok hashtag 热点采集失败")
+        raise HTTPException(status_code=502, detail=f"TikTok hashtag 热点采集失败：{exc}")
 
 
 # 2.热点批量匹配（需登录；品牌信息由服务端从当前商户读取）
