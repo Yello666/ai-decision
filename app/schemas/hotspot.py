@@ -26,29 +26,35 @@ class RiskEnum(str,Enum):
 #没有id和跳转链接
 # 输入给大模型作判断的热点，尽量精简减少token消耗
 class TrendObject(BaseModel):
-    title: str = Field(..., description="热点标题/关键词")
-    summary: str = Field(..., min_length=1, description="热点描述/摘要（50-200字建议，但不强制）")
-    tags: List[str] = Field(default_factory=list, description="核心标签，如：#美食 #跨界")
+    title: str = Field(..., description="热点标题")
+    summary: str = Field(..., min_length=1, description="热点摘要/核心内容概述（建议精炼以节省 token）")
+    tags: List[str] = Field(default_factory=list, description="热点标签（话题、品类、关键词等）")
     # view_counts: int = Field(..., description="播放/浏览量")
     # likes:int=Field(..., description="点赞数")
     # publish_time: str = Field(..., description="发布时间（ISO格式，如：2026-02-12T10:00:00）")
     # sentiment_label: SentimentCN = Field(default=SentimentCN.neutral, description="情感倾向：正面/负面/中性")
     # 不需要展示sentiment，只会有中性、积极两种，而且模型本来就可以根据文本分析
-    audience: Optional[List[str]] = Field(default=None, description="热点受众画像（可选）")
+    audience: Optional[List[str]] = Field(
+        default=None,
+        description="热点受众画像（平台推断或内容归纳的人群标签，可选）",
+    )
     #需要audience，因为这个比tag要精确很多
 
 # 获取到的输出的热点，展示到前端（全面的信息）
 class CollectTrendObject(BaseModel):
     id: str = Field(..., description="热点唯一标识ID")
-    title: str = Field(..., description="热点标题/关键词")
-    summary: str = Field(..., min_length=1, description="热点描述/摘要（50-200字建议，但不强制）")
-    tags: List[str] = Field(default_factory=list, description="核心标签，如：#美食 #跨界")
+    title: str = Field(..., description="热点标题")
+    summary: str = Field(..., min_length=1, description="热点摘要/核心内容概述")
+    tags: List[str] = Field(default_factory=list, description="热点标签（话题、品类、关键词等）")
 
     # 展示给客户，需要展示情感倾向，这可以提升用户体验，体现分析过程的严谨性，
     sentiment_label: SentimentCN = Field(default=SentimentCN.neutral, description="情感倾向：正面/负面/中性")
     sentiment_score:float=Field(default=0.0, description="情感倾向程度，-100为极度负面，100为极度正面")
 
-    audience: Optional[List[str]] = Field(default=None, description="热点受众画像（可选）")
+    audience: Optional[List[str]] = Field(
+        default=None,
+        description="热点受众画像（平台推断或内容归纳的人群标签，可选）",
+    )
 
     risk_category: RiskEnum = Field(default=RiskEnum.none, description="营销风险评估")
     warning_message: str = Field(default="", description="营销风险建议")
@@ -70,31 +76,60 @@ class BrandObject(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str = Field(..., description="品牌名称")
-    core_value: Optional[str] = Field(default=None, description="品牌Slogan/核心价值/品牌介绍")
-    mainly_sold_products: str = Field(...,description="主要售卖商品品类",)
-    tone: str = Field(..., description="品牌风格（年轻/高端/搞怪/严谨等）")
-    audience: Optional[List[str]] = Field(default=None, description="品牌目标受众（可选）")
+    core_value: Optional[str] = Field(
+        default=None,
+        description="品牌介绍（定位、故事、卖点、Slogan 等；可与「核心价值」同源填写）",
+    )
+    mainly_sold_products: str = Field(
+        ...,
+        description="主要售卖产品或品类（用于判断热点与业务的切入点）",
+    )
+    tone: str = Field(..., description="品牌调性（如年轻/高端/接地气/搞怪/严谨等）")
+    audience: Optional[List[str]] = Field(default=None, description="品牌目标受众标签（可选）")
 
 
 class BrandUpdate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: Optional[str] = Field(default=None, description="品牌名称")
-    core_value: Optional[str] = Field(default=None, description="品牌Slogan/核心价值")
+    core_value: Optional[str] = Field(
+        default=None,
+        description="品牌介绍（定位、故事、Slogan 等）",
+    )
     mainly_sold_products: Optional[str] = Field(
         default=None,
-        description="主要售卖商品品类",
+        description="主要售卖产品或品类",
         alias="industry",
     )
-    tone: Optional[str] = Field(default=None, description="品牌调性（年轻/高端/搞怪/严谨等）")
+    tone: Optional[str] = Field(default=None, description="品牌调性（年轻/高端/接地气/搞怪/严谨等）")
     audience: Optional[List[str]] = Field(default=None, description="品牌目标受众（可选）")
 
 
 class MatchRadar(BaseModel):
-    semantic_relevance: float = Field(..., ge=0, le=100, description="语义相关性（0-100）")
-    tone_fit: float = Field(..., ge=0, le=100, description="调性匹配度（0-100）")
-    audience_overlap: float = Field(..., ge=0, le=100, description="受众重合度（0-100）")
-    risk_index: float = Field(..., ge=0, le=100, description="风险指数（0-100，越高越危险）")
+    business_relevance: float = Field(
+        ...,
+        ge=0,
+        le=100,
+        description="业务相关性（0-100）：热点与品牌品类、产品、使用场景的契合度；越高表示越容易找到自然的产品切入点",
+    )
+    audience_overlap: float = Field(
+        ...,
+        ge=0,
+        le=100,
+        description="受众重合度（0-100）：热点受众画像与品牌目标用户的重叠程度",
+    )
+    brand_voice_fit: float = Field(
+        ...,
+        ge=0,
+        le=100,
+        description="品牌调性契合度（0-100）：热点语气、风格与品牌调性是否一致（如接地气热点配接地气品牌）",
+    )
+    marketing_risk: float = Field(
+        ...,
+        ge=0,
+        le=100,
+        description="营销风险（0-100）：越高表示跟风蹭热点时出现公关或舆情风险越大（合规、负面联想、价值观冲突等）",
+    )
 
 
 class RecommendationLevel(str, Enum):
@@ -119,6 +154,21 @@ class RecommendationLevel(str, Enum):
             "不推荐": cls.no,
         }
         return mapping.get(value, cls.no)
+
+
+def recommendation_level_from_compatibility_score(score: float) -> RecommendationLevel:
+    """由服务端合成的契合度分数映射推荐等级（与雷达维度加权口径一致）。"""
+    if score >= 80:
+        return RecommendationLevel.strong_yes
+    if score >= 65:
+        return RecommendationLevel.yes
+    if score >= 50:
+        return RecommendationLevel.try_it
+    if score >= 35:
+        return RecommendationLevel.cautious
+    if score >= 20:
+        return RecommendationLevel.no
+    return RecommendationLevel.strong_no
 
 
 class RecommendEmailScheduleMode(str, Enum):
@@ -192,11 +242,22 @@ class HotspotBatchMatchRequest(BaseModel):
 class HotspotMatchResponse(BaseModel):
     brand_name: str = Field(..., description="品牌名")
     trend_title: str = Field(..., description="热点标题")
-    compatibility_score: float = Field(..., ge=0, le=100, description="契合度得分（0-100）")
+    compatibility_score: float = Field(
+        ...,
+        ge=0,
+        le=100,
+        description=(
+            "契合度总分（0-100），服务端按固定权重对 radar 各维度加权合成："
+            "0.35×业务相关性 + 0.25×受众重合 + 0.25×调性契合 + 0.15×(100−营销风险)"
+        ),
+    )
     recommendation: RecommendationLevel
     radar: MatchRadar
     reason: str = Field(..., description="简短分析理由")
-    suggestion: str = Field(..., description="营销切入点建议（一句话）")
+    suggestion: str = Field(
+        ...,
+        description="营销切入点建议：若要借势该热点，建议从何种角度传达品牌或产品",
+    )
     risk_warning: Optional[str] = Field(default=None, description="风险提示（如存在公关风险）")
 
 

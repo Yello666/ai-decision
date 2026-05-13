@@ -14,8 +14,8 @@ from app.schemas.hotspot import (
     HotspotMatchResponse,
     TrendObject,
     BrandObject,
-    RecommendationLevel,
-    MatchRadar
+    MatchRadar,
+    recommendation_level_from_compatibility_score,
 )
 from app.services.hotspot_service.match_cache import (
     mget_match,
@@ -38,6 +38,35 @@ ASYNC_LLM_CLIENT = AsyncOpenAI(
     http_client=httpx.AsyncClient(proxy=None),
 )
 MATCH_BATCH_SIZE = 10
+
+# 契合度加权合成（与 HotspotMatchResponse.compatibility_score 描述保持一致）。
+# marketing_risk 越高风险越大，故用 (100 - marketing_risk) 作为「安全性得分」参与加权。
+MATCH_WEIGHT_BUSINESS_RELEVANCE = 0.35
+MATCH_WEIGHT_AUDIENCE_OVERLAP = 0.25
+MATCH_WEIGHT_BRAND_VOICE_FIT = 0.25
+MATCH_WEIGHT_MARKETING_SAFETY = 0.15
+
+
+def compute_compatibility_score(
+    business_relevance: float,
+    audience_overlap: float,
+    brand_voice_fit: float,
+    marketing_risk: float,
+) -> float:
+    """由四分维度合成 0-100 契合度总分（保留一位小数）。"""
+    br = max(0.0, min(100.0, float(business_relevance)))
+    ao = max(0.0, min(100.0, float(audience_overlap)))
+    bvf = max(0.0, min(100.0, float(brand_voice_fit)))
+    mr = max(0.0, min(100.0, float(marketing_risk)))
+    safety = 100.0 - mr
+    raw = (
+        MATCH_WEIGHT_BUSINESS_RELEVANCE * br
+        + MATCH_WEIGHT_AUDIENCE_OVERLAP * ao
+        + MATCH_WEIGHT_BRAND_VOICE_FIT * bvf
+        + MATCH_WEIGHT_MARKETING_SAFETY * safety
+    )
+    return round(max(0.0, min(100.0, raw)), 1)
+
 
 # --------------------------
 # V3：面向"单品牌 + 多热点"的批量 LLM 匹配（品牌信息只写一次；带 (brand,trend) 结果缓存）
@@ -117,9 +146,17 @@ async def _llm_match_single_brand_async(
 【品牌信息】
 名称：{brand.name}
 主要售卖产品：{brand.mainly_sold_products}
-核心价值：{brand.core_value or '未提供'}
+品牌介绍：{brand.core_value or '未提供'}
 品牌调性：{brand.tone}
 目标受众：{', '.join(brand.audience) if brand.audience else '未提供'}
+
+你将只为每个热点输出分项评分与文案；综合契合度总分由系统在服务端按固定权重自动计算，请勿输出 compatibility_score。
+
+分项维度说明（均为 0-100 浮点数）：
+- business_relevance：热点与品牌品类、产品、使用场景的「业务相关性」。是否存在自然、可信的产品或场景切入点（例如热点讨论芥末味咖啡而品牌正好卖咖啡，则该项应偏高）。
+- audience_overlap：热点受众画像与品牌目标用户的重合度。
+- brand_voice_fit：热点常见的表达方式、气质是否与品牌调性一致（同品类下，接地气热点配接地气品牌该项更高）。
+- marketing_risk：营销风险；越高表示跟风蹭热点时越可能出现公关、舆情、合规或价值观层面的问题。
 
 输出格式要求：
 - 严格输出 JSON，不要任何多余解释/前后缀。
@@ -127,14 +164,13 @@ async def _llm_match_single_brand_async(
 - 每个元素 schema：
 {{
   "index": Integer,                    // 与输入 index 一致
-  "semantic_relevance": Float,         // 0-100
-  "tone_fit": Float,                   // 0-100
-  "audience_overlap": Float,           // 0-100
-  "risk_index": Float,                 // 0-100 越高越危险
-  "compatibility_score": Float,        // 0-100 综合契合度
-  "recommendation": String,            // 强烈推荐|推荐|值得尝试|谨慎考虑|不建议|强烈不建议
-  "suggestion": String,                // 结合热点的一句话营销切入点
-  "reason": String                     // 简短分析理由
+  "business_relevance": Float,         // 0-100
+  "audience_overlap": Float,         // 0-100
+  "brand_voice_fit": Float,          // 0-100
+  "marketing_risk": Float,           // 0-100，越高风险越大
+  "suggestion": String,              // 若要借势该热点，建议从什么营销角度切入（一句话）
+  "reason": String,                  // 简短分析理由（为何给出上述分数）
+  "risk_warning": String             // 可选：有明显风险时一两句风险提示；无则填空字符串 ""
 }}
 """
 
@@ -148,7 +184,11 @@ async def _llm_match_single_brand_async(
         }
         for i, t in enumerate(trends)
     ]
-    user_prompt = f"【待评估热点列表】\n{json.dumps(items_data, ensure_ascii=False)}"
+    user_prompt = (
+        "【待评估热点列表】每项字段含义：title=热点标题，summary=摘要，tags=标签，"
+        "audience=热点受众画像（可选）。\n"
+        f"{json.dumps(items_data, ensure_ascii=False)}"
+    )
 
     response = await ASYNC_LLM_CLIENT.chat.completions.create(
         model=llm_model,
@@ -189,24 +229,41 @@ def _build_match_response(
     raw: Dict[str, Any],
 ) -> HotspotMatchResponse:
     """将 LLM/缓存中的 dict 结果转换为 HotspotMatchResponse。"""
-    required = ["compatibility_score", "recommendation", "suggestion", "reason",
-                "semantic_relevance", "tone_fit", "audience_overlap", "risk_index"]
+    required = [
+        "business_relevance",
+        "audience_overlap",
+        "brand_voice_fit",
+        "marketing_risk",
+        "suggestion",
+        "reason",
+    ]
     for key in required:
         if key not in raw:
             raise KeyError(f"缺少必要字段: {key}")
 
+    radar = MatchRadar(
+        business_relevance=float(raw["business_relevance"]),
+        audience_overlap=float(raw["audience_overlap"]),
+        brand_voice_fit=float(raw["brand_voice_fit"]),
+        marketing_risk=float(raw["marketing_risk"]),
+    )
+    compatibility_score = compute_compatibility_score(
+        radar.business_relevance,
+        radar.audience_overlap,
+        radar.brand_voice_fit,
+        radar.marketing_risk,
+    )
+
+    rw = raw.get("risk_warning")
+    risk_warning = rw if isinstance(rw, str) and rw.strip() else None
+
     return HotspotMatchResponse(
         brand_name=brand.name,
         trend_title=trend.title,
-        compatibility_score=float(raw["compatibility_score"]),
-        recommendation=RecommendationLevel.from_str(raw["recommendation"]),
-        radar=MatchRadar(
-            semantic_relevance=float(raw["semantic_relevance"]),
-            tone_fit=float(raw["tone_fit"]),
-            audience_overlap=float(raw["audience_overlap"]),
-            risk_index=float(raw["risk_index"]),
-        ),
+        compatibility_score=compatibility_score,
+        recommendation=recommendation_level_from_compatibility_score(compatibility_score),
+        radar=radar,
         reason=raw["reason"],
         suggestion=raw["suggestion"],
-        risk_warning=raw.get("risk_warning"),
+        risk_warning=risk_warning,
     )
