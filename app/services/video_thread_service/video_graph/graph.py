@@ -9,7 +9,7 @@ LangGraph 视频生成编排系统 —— Graph 定义与组装。
   video interrupt:
     ↳ finished → finished → END
     ↳ regenerate → assemble_and_submit → respond → wait video results → [video interrupt]
-    ↳ edit     → apply_edit → set_waiting_human → [interrupt]
+    ↳ edit     → apply_edit → 若来自视频审阅则回到 [video interrupt]；否则 set_waiting_human → [script interrupt]
     ↳ feedback → revise_script → set_waiting_human → [interrupt]
 """
 from __future__ import annotations
@@ -31,10 +31,12 @@ from app.services.video_thread_service.video_graph.nodes import (
     respond,
     revise_script,
     route_human_action,
+    route_after_apply_edit,
     human_interrupt,
     set_waiting_video_results,
     wait_video_results,
     set_status_vd,
+    set_video_review_after_edit,
     human_interrupt_vd,
     route_human_vd_action,
     finished,
@@ -67,6 +69,7 @@ def build_video_graph() -> StateGraph:
     graph.add_node("set_waiting_video_results", set_waiting_video_results)
     graph.add_node("wait_video_results", wait_video_results)
     graph.add_node("set_status_vd", set_status_vd)
+    graph.add_node("set_video_review_after_edit", set_video_review_after_edit)
     graph.add_node("human_interrupt_vd", human_interrupt_vd)
     graph.add_node("finished", finished)
 
@@ -108,8 +111,16 @@ def build_video_graph() -> StateGraph:
         },
     )
 
-    # ── 边: apply_edit → set_waiting_human（编辑后再次确认）──
-    graph.add_edge("apply_edit", "set_waiting_human")
+    # ── 边: apply_edit → 分镜阶段回剧本中断；视频审阅阶段改分镜则回视频中断 ──
+    graph.add_conditional_edges(
+        "apply_edit",
+        route_after_apply_edit,
+        {
+            "return_video_review": "set_video_review_after_edit",
+            "script_review": "set_waiting_human",
+        },
+    )
+    graph.add_edge("set_video_review_after_edit", "human_interrupt_vd")
 
     # ── 边: revise_script → set_waiting_human (带错误检查) ──
     graph.add_conditional_edges(

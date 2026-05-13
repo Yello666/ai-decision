@@ -538,6 +538,29 @@ async def apply_edit(state: VideoGenerationState) -> dict[str, Any]:
     }
 
 
+def route_after_apply_edit(state: VideoGenerationState) -> str:
+    """区分「分镜阶段改稿」与「视频审阅阶段改分镜」后的去向。"""
+    if state.get("human_vd_action") == "edit" and state.get("review_phase") == "video":
+        return "return_video_review"
+    return "script_review"
+
+
+async def set_video_review_after_edit(state: VideoGenerationState) -> dict[str, Any]:
+    """视频审阅里 apply_edit 完成后：回到视频审阅中断，不经过剧本 interrupt。"""
+    await publish_event(state.get("thread_id", ""), "progress", {
+        "progress": 100,
+        "message": "分镜已更新，请继续审阅视频结果",
+        "step": "waiting_human_vd",
+    })
+    return {
+        "current_step": "waiting_human_vd",
+        "review_phase": "video",
+        "human_vd_action": None,
+        "human_action": None,
+        "target_segment_ids": [],
+    }
+
+
 # ──────────────────────────────────────────────
 # 重写剧本（用户给反馈，LLM 重新生成）
 # ──────────────────────────────────────────────
