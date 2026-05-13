@@ -384,7 +384,10 @@ async def set_waiting_human(state: VideoGenerationState) -> dict[str, Any]:
 
     return {
         "current_step": "waiting_human",
+        "review_phase": "script",
         "human_action": None,
+        "human_vd_action": None,
+        "target_segment_ids": [],
     }
 
 async def human_interrupt(state: VideoGenerationState) -> dict:
@@ -535,6 +538,29 @@ async def apply_edit(state: VideoGenerationState) -> dict[str, Any]:
     }
 
 
+def route_after_apply_edit(state: VideoGenerationState) -> str:
+    """区分「分镜阶段改稿」与「视频审阅阶段改分镜」后的去向。"""
+    if state.get("human_vd_action") == "edit" and state.get("review_phase") == "video":
+        return "return_video_review"
+    return "script_review"
+
+
+async def set_video_review_after_edit(state: VideoGenerationState) -> dict[str, Any]:
+    """视频审阅里 apply_edit 完成后：回到视频审阅中断，不经过剧本 interrupt。"""
+    await publish_event(state.get("thread_id", ""), "progress", {
+        "progress": 100,
+        "message": "分镜已更新，请继续审阅视频结果",
+        "step": "waiting_human_vd",
+    })
+    return {
+        "current_step": "waiting_human_vd",
+        "review_phase": "video",
+        "human_vd_action": None,
+        "human_action": None,
+        "target_segment_ids": [],
+    }
+
+
 # ──────────────────────────────────────────────
 # 重写剧本（用户给反馈，LLM 重新生成）
 # ──────────────────────────────────────────────
@@ -550,6 +576,28 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
     })
 
     feedback = state.get("human_feedback", "")
+    target_segment_ids = state.get("target_segment_ids", [])
+    if target_segment_ids:
+        task_by_segment = _latest_task_by_segment(state.get("task_results", []))
+        video_context_lines = []
+        for sid in target_segment_ids:
+            task = task_by_segment.get(sid) or {}
+            video_context_lines.append(
+                "segment_id={sid}, status={status}, video_url={video_url}, "
+                "error={error}, last_frame_url={last_frame}".format(
+                    sid=sid,
+                    status=task.get("status", ""),
+                    video_url=task.get("video_url", ""),
+                    error=task.get("error_message", ""),
+                    last_frame=task.get("last_frame_url", ""),
+                )
+            )
+        feedback = (
+            f"Only revise these segment_id values: {target_segment_ids}. "
+            "Preserve all other segments unless continuity absolutely requires a small adjustment. "
+            f"Video result context: {' | '.join(video_context_lines)}. "
+            f"User feedback: {feedback}"
+        )
     segments = state.get("script_segments", [])
     revision_count = state.get("revision_count", 0)
 
@@ -577,6 +625,19 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
         return {"current_step": "error", "error": f"剧本修改失败: {e}"}
 
     new_segments: list[ScriptSegment] = revised.get("segments", segments)
+    if target_segment_ids:
+        target_id_set = set(target_segment_ids)
+        revised_by_id = {
+            seg.get("segment_id"): seg
+            for seg in new_segments
+            if seg.get("segment_id") in target_id_set
+        }
+        new_segments = [
+            revised_by_id.get(seg.get("segment_id"), seg)
+            if seg.get("segment_id") in target_id_set
+            else seg
+            for seg in segments
+        ]
     normalized_segments: list[ScriptSegment] = []
     try:
         for idx, seg in enumerate(new_segments, start=1):
@@ -617,6 +678,8 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
 # ──────────────────────────────────────────────
 # 节点 D：API 组装与执行
 # ──────────────────────────────────────────────
+#seedance2.0返回信息地址，区分本地开发和生成环境，本地开发采用本机公网地址
+#CALLBACK_URL = "https://23.156.152.46/api/v1/video-thread/callback"
 CALLBACK_URL = "https://shop-ai.xin/api/v1/video-thread/callback"
 
 
@@ -637,12 +700,22 @@ def _build_multimodal_prompt(prompt: str, *, has_continuity_frame: bool) -> str:
     )
 
 
+def _build_first_last_frame_prompt(prompt: str) -> str:
+    return (
+        "Use the provided first frame and last frame as strict continuity anchors. "
+        "The generated segment must start from the first frame and end close to the last frame, "
+        "while preserving character identity, product placement, lighting, and visual style. "
+        f"{prompt}"
+    )
+
+
 def build_payload_for_segment(
     segment: dict,
     config: dict,
     media: dict | None = None,
     *,
     continuity_image_url: str = "",
+    end_frame_url: str = "",
 ):
     """将单个脚本片段包装成 Seedance 2.0 请求对象。"""
     from app.schemas.seedance2 import Seedance2VideoRequest
@@ -665,6 +738,15 @@ def build_payload_for_segment(
         "callback_url": CALLBACK_URL,
         "return_last_frame": True,
     }
+
+    if continuity_image_url and end_frame_url:
+        common["prompt"] = _build_first_last_frame_prompt(prompt)
+        return Seedance2VideoRequest(
+            mode="first_last_frame",
+            first_frame_url=continuity_image_url,
+            last_frame_url=end_frame_url,
+            **common,
+        )
 
     if mode == "multimodal_reference":
         base_images = _as_str_list(
@@ -759,6 +841,71 @@ def _inject_size_constraint_for_submission(
     return with_size
 
 
+TERMINAL_VIDEO_STATUSES = {"succeeded", "failed", "expired", "cancelled"}
+
+
+def _is_video_regeneration(state: VideoGenerationState) -> bool:
+    return (
+        state.get("review_phase") == "video"
+        and state.get("human_vd_action") == "regenerate"
+    )
+
+
+def _target_segment_id_set(state: VideoGenerationState, segments: list[dict]) -> set[int]:
+    raw_ids = state.get("target_segment_ids") or []
+    ids = {int(sid) for sid in raw_ids if isinstance(sid, int)}
+    if ids:
+        return ids
+    return {
+        int(seg.get("segment_id"))
+        for seg in segments
+        if isinstance(seg.get("segment_id"), int)
+    }
+
+
+def _latest_task_by_segment(task_results: list[dict]) -> dict[int, dict]:
+    latest: dict[int, dict] = {}
+    for item in task_results or []:
+        sid = item.get("segment_id")
+        if isinstance(sid, int):
+            latest[sid] = item
+    return latest
+
+
+def _last_frame_for_segment(task_results: list[dict], segment_id: int) -> str:
+    task = _latest_task_by_segment(task_results).get(segment_id) or {}
+    return str(task.get("last_frame_url") or "").strip()
+
+
+def _merge_task_results_for_submission(
+    existing_results: list[dict],
+    submitted_results: list[dict],
+    *,
+    replaced_segment_ids: set[int],
+) -> list[dict]:
+    kept = [
+        dict(item)
+        for item in existing_results or []
+        if item.get("segment_id") not in replaced_segment_ids
+    ]
+    return [*kept, *submitted_results]
+
+
+def _all_segments_have_terminal_video_results(state: VideoGenerationState) -> bool:
+    segments = state.get("script_segments", [])
+    latest = _latest_task_by_segment(state.get("task_results", []))
+    if not segments:
+        return False
+    for seg in segments:
+        sid = seg.get("segment_id")
+        if not isinstance(sid, int):
+            continue
+        task = latest.get(sid)
+        if not task or task.get("status") not in TERMINAL_VIDEO_STATUSES:
+            return False
+    return True
+
+
 async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
     """
     根据 script_segments 构建 Seedance payload 并提交任务。
@@ -774,38 +921,81 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
         "step": "assemble_and_submit_running",
     })
 
-    segments = _inject_size_constraint_for_submission(
+    all_segments = _inject_size_constraint_for_submission(
         state.get("script_segments", []),
         state,
     )
     config = state.get("parsed_config", DEFAULT_CONFIG)
     store_id = state.get("shopify_store_id", "")
     media = state.get("parsed_media") or {}
-
-    task_results = []
+    existing_task_results = list(state.get("task_results", []))
+    is_regeneration = _is_video_regeneration(state)
+    target_ids = _target_segment_id_set(state, all_segments) if is_regeneration else set()
+    segments = (
+        [seg for seg in all_segments if seg.get("segment_id") in target_ids]
+        if is_regeneration
+        else all_segments
+    )
+    replaced_segment_ids = target_ids if is_regeneration else set()
+    submitted_results: list[dict[str, Any]] = []
 
     first_seg = dict(segments[0]) if segments else {}
     if not first_seg:
+        task_results = _merge_task_results_for_submission(
+            existing_task_results,
+            [],
+            replaced_segment_ids=replaced_segment_ids,
+        )
         return {
-            "task_results": [],
+            "task_results": task_results,
             "final_status": "failed",
             "error": "无剧本片段可提交",
             "current_step": "error",
         }
 
-    payload = build_payload_for_segment(first_seg, config, media)
+    first_sid = first_seg.get("segment_id")
+    previous_last_frame = (
+        _last_frame_for_segment(existing_task_results, int(first_sid) - 1)
+        if is_regeneration and isinstance(first_sid, int)
+        else ""
+    )
+    old_end_frame = (
+        _last_frame_for_segment(existing_task_results, int(first_sid))
+        if is_regeneration and isinstance(first_sid, int)
+        else ""
+    )
+    payload = build_payload_for_segment(
+        first_seg,
+        config,
+        media,
+        continuity_image_url=previous_last_frame,
+        end_frame_url=old_end_frame,
+    )
+    submit_lf = getattr(payload, "last_frame_url", None)
+    submit_lf = str(submit_lf).strip() if submit_lf else ""
     try:
         result = await create_seedance_video_task(payload)
         task_id = result.get("id", "")
-        task_results.append({
+        row: dict[str, Any] = {
             "segment_id": first_seg.get("segment_id"),
             "task_id": task_id,
             "status": result.get("status", "submitted"),
             "prompt": first_seg.get("description", ""),
-        })
+        }
+        if submit_lf:
+            row["last_frame_url"] = submit_lf
+        submitted_results.append(row)
 
         if task_id and len(segments) > 1:
             redis_client = get_redis_client()
+            end_frame_by_segment = {
+                str(seg.get("segment_id")): _last_frame_for_segment(
+                    existing_task_results,
+                    int(seg.get("segment_id")),
+                )
+                for seg in segments[1:]
+                if isinstance(seg.get("segment_id"), int)
+            }
             chain_data = {
                 "remaining_segments": [dict(s) for s in segments[1:]],
                 "config": dict(config),
@@ -814,6 +1004,7 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
                 "thread_id": thread_id,
                 "trend": state.get("trend", {}),
                 "brand": state.get("brand", {}),
+                "end_frame_by_segment": end_frame_by_segment,
             }
             await redis_client.set(
                 f"seq_chain:{task_id}",
@@ -826,14 +1017,31 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
             )
     except Exception:
         logger.exception("Seedance2 首段任务提交失败")
-        task_results.append({
+        fail_row: dict[str, Any] = {
             "segment_id": first_seg.get("segment_id"),
             "task_id": "",
             "status": "failed",
             "prompt": first_seg.get("description", ""),
-        })
+        }
+        if submit_lf:
+            fail_row["last_frame_url"] = submit_lf
+        submitted_results.append(fail_row)
+        for skipped in segments[1:]:
+            submitted_results.append({
+                "segment_id": skipped.get("segment_id"),
+                "task_id": "",
+                "status": "failed",
+                "prompt": skipped.get("description", ""),
+                "error_message": "首段视频提交失败，后续串行段未提交",
+            })
 
-    all_ok = all(r.get("status") != "failed" for r in task_results)
+    task_results = _merge_task_results_for_submission(
+        existing_task_results,
+        submitted_results,
+        replaced_segment_ids=replaced_segment_ids,
+    )
+
+    all_ok = all(r.get("status") != "failed" for r in submitted_results)
     await publish_event(thread_id, "progress", {
         "progress": 95,
         "message": "任务已提交，正在登记生成记录…",
@@ -843,6 +1051,7 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
         "task_results": task_results,
         "final_status": "submitted" if all_ok else "partial_failure",
         "current_step": "submitted",
+        "target_segment_ids": list(target_ids) if is_regeneration else [],
     }
 
 
@@ -877,6 +1086,8 @@ async def respond(state: VideoGenerationState) -> dict[str, Any]:
         for tr in task_results:
             if not tr.get("task_id"):
                 continue
+            if tr.get("generation_id"):
+                continue
             gen = Generation(
                 shopify_store_id=store_id,
                 type="video",
@@ -907,7 +1118,7 @@ async def respond(state: VideoGenerationState) -> dict[str, Any]:
             "task_results": task_results,
             "final_status": "db_error",
             "error": str(e),
-            "current_step": "done",
+            "current_step": "submitted",
         }
     finally:
         db.close()
@@ -915,11 +1126,147 @@ async def respond(state: VideoGenerationState) -> dict[str, Any]:
     final_status = state.get("final_status", "submitted")
     await publish_event(state.get("thread_id", ""), "progress", {
         "progress": 100,
-        "message": "视频生成任务已成功提交",
-        "step": "done",
+        "message": "视频生成任务已成功提交，等待视频结果审阅",
+        "step": "submitted",
     })
     return {
         "task_results": task_results,
         "final_status": final_status,
-        "current_step": "done",
+        "current_step": "submitted",
+    }
+
+
+# ──────────────────────────────────────────────
+# 视频结果审阅阶段
+# ──────────────────────────────────────────────
+async def set_waiting_video_results(state: VideoGenerationState) -> dict[str, Any]:
+    """视频任务已提交，系统等待所有段生成结束后再进入用户审阅。"""
+    await publish_event(state.get("thread_id", ""), "progress", {
+        "progress": 98,
+        "message": "视频生成中，请稍候…",
+        "step": "waiting_video_results",
+    })
+    return {
+        "current_step": "waiting_video_results",
+        "review_phase": "video_generating",
+    }
+
+
+async def wait_video_results(state: VideoGenerationState) -> dict[str, Any]:
+    """系统中断点：由 callback 在所有视频任务终态后自动恢复。"""
+    if _all_segments_have_terminal_video_results(state):
+        return {
+            "current_step": "video_results_ready",
+            "review_phase": "video",
+        }
+
+    interrupt_payload = {
+        "event": "waiting_video_results",
+        "task_results": state.get("task_results", []),
+        "message": "视频生成中，完成后将自动进入审阅阶段",
+    }
+    await publish_event(
+        state.get("thread_id", ""),
+        "waiting_video_results",
+        interrupt_payload,
+    )
+    interrupt(interrupt_payload)
+    return {
+        "current_step": "video_results_ready",
+        "review_phase": "video",
+    }
+
+
+async def set_status_vd(state: VideoGenerationState) -> dict[str, Any]:
+    """提交视频任务后进入视频结果审阅阶段。"""
+    await publish_event(state.get("thread_id", ""), "progress", {
+        "progress": 100,
+        "message": "视频任务已提交，请等待生成结果并审阅",
+        "step": "waiting_human_vd",
+    })
+    return {
+        "current_step": "waiting_human_vd",
+        "review_phase": "video",
+        "human_vd_action": None,
+        "target_segment_ids": [],
+    }
+
+
+def _video_results_for_interrupt(state: VideoGenerationState) -> list[dict[str, Any]]:
+    segments = state.get("script_segments", [])
+    task_by_segment = {
+        tr.get("segment_id"): tr
+        for tr in state.get("task_results", [])
+        if tr.get("segment_id") is not None
+    }
+    results: list[dict[str, Any]] = []
+    for seg in segments:
+        sid = seg.get("segment_id")
+        task = task_by_segment.get(sid, {})
+        results.append({
+            "segment_id": sid,
+            "description": seg.get("description_zh") or seg.get("description"),
+            "duration": seg.get("duration"),
+            "mode": seg.get("mode"),
+            "task_id": task.get("task_id"),
+            "generation_id": task.get("generation_id"),
+            "status": task.get("status"),
+            "video_url": task.get("video_url"),
+            "error_message": task.get("error_message"),
+            "last_frame_url": task.get("last_frame_url"),
+        })
+    return results
+
+
+async def human_interrupt_vd(state: VideoGenerationState) -> dict:
+    """视频生成结果审阅中断点。"""
+    interrupt_payload = {
+        "event": "require_video_review",
+        "review_phase": "video",
+        "segments": _video_results_for_interrupt(state),
+        "task_results": state.get("task_results", []),
+        "target_segment_ids": state.get("target_segment_ids", []),
+        "message": "请审阅视频结果，选择: finished(确认通过) / regenerate(按原分镜重生成) / edit(修改分镜) / feedback(提出意见重写分镜)",
+    }
+
+    await publish_event(
+        state.get("thread_id", ""),
+        "video_action_required",
+        interrupt_payload,
+    )
+
+    human_input = interrupt(interrupt_payload)
+    return {
+        "human_vd_action": human_input.get("human_vd_action", "finished"),
+        "human_edited_segments": human_input.get("human_edited_segments", []),
+        "human_feedback": human_input.get("human_feedback", ""),
+        "target_segment_ids": human_input.get("target_segment_ids", []),
+        "current_step": "video_human_responded",
+    }
+
+
+def route_human_vd_action(state: VideoGenerationState) -> str:
+    """根据视频审阅动作决定下一步。"""
+    action = state.get("human_vd_action")
+    if action == "finished":
+        return "finished"
+    if action == "edit":
+        return "apply_edit"
+    if action == "feedback":
+        return "revise_script"
+    if action == "regenerate":
+        return "assemble_and_submit"
+    return "set_status_vd"
+
+
+async def finished(state: VideoGenerationState) -> dict[str, Any]:
+    """用户确认视频结果通过后的终态节点。"""
+    await publish_event(state.get("thread_id", ""), "done", {
+        "message": "视频结果已确认",
+        "step": "finished",
+    })
+    return {
+        "current_step": "finished",
+        "final_status": "finished",
+        "review_phase": "video",
     }

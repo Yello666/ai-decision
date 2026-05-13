@@ -49,6 +49,10 @@ class TaskResult(TypedDict, total=False):
     generation_id: int
     status: str
     prompt: str
+    video_url: str
+    error_message: str
+    # 首尾帧模式下的尾帧输入 URL；或任务成功回调里 return_last_frame 返回的尾帧图 URL
+    last_frame_url: str
 
 
 class VideoGenerationState(TypedDict, total=False):
@@ -92,6 +96,11 @@ class VideoGenerationState(TypedDict, total=False):
     human_edited_segments: list[ScriptSegment]
     human_feedback: str
     revision_count: int
+
+    # ---- 视频结果审阅阶段 ----
+    review_phase: Literal["script", "video_generating", "video"]
+    human_vd_action: Literal["finished", "edit", "feedback", "regenerate"] | None
+    target_segment_ids: list[int]
 
     # ---- 节点 D/E 执行结果 ----
     task_results: list[TaskResult]

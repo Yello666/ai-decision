@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # -------- 本地开发开关 --------
     # True  → 使用本地配置
     # False → 使用.env线上配置
-    LOCAL_DEV: bool = True
+    LOCAL_DEV: bool = False
     
 
     # 基础项目配置
@@ -138,7 +138,7 @@ class Settings(BaseSettings):
     LLM_API_KEY: Optional[str] = None
     LLM_API_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     LLM_MODEL_V4_DEEPSEEK: str = "deepseek-v4-pro"
-    LLM_MODEL_36_PLUS: str = "qwen3.6-plus"
+    LLM_MODEL_36_PLUS: str = "deepseek-v4-pro"
     LLM_MODEL_35_PLUS: str = "qwen3.5-plus"
     LLM_MODEL_36_FLASH: str = "qwen3.6-flash-2026-04-16"
     # 热点批量分析 prompt 较大，默认放宽，避免网关/服务端慢导致断连（可通过环境变量覆盖）

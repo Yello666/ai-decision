@@ -95,9 +95,13 @@ class EditedSegmentInput(BaseModel):
 
 
 class ResumeThreadRequest(BaseModel):
-    action: Literal["approve", "edit", "feedback"]
+    action: Literal["approve", "edit", "feedback", "finished", "regenerate"]
     edited_segments: list[EditedSegmentInput] = Field(default_factory=list)
     feedback: str = ""
+    target_segment_ids: list[int] = Field(
+        default_factory=list,
+        description="视频审阅阶段需要重写/编辑的 segment_id 列表；为空表示由后端按全量处理",
+    )
 
     # 可选：在恢复 Graph 前，顺带覆盖全局视频参数。
     # 任何一项不传则保留当前 state 的原值；传入时执行 merge（config_params）或整体替换（media_assets / generation_mode）。
@@ -175,8 +179,14 @@ class VideoThreadListResponse(BaseModel):
 #   assistant_draft    → LLM 给出的一版分镜（plan_script / apply_edit / revise_script 产出）
 #   user_action        → 用户对某一版草稿做的决策（approve / edit / feedback）
 #   submitted          → 进入 Seedance 任务提交，后续不再需要草稿级 replay
-TurnKind = Literal["user_input", "assistant_draft", "user_action", "submitted"]
-UserActionKind = Literal["approve", "edit", "feedback"]
+TurnKind = Literal[
+    "user_input",
+    "assistant_draft",
+    "user_action",
+    "submitted",
+    "video_user_action",
+]
+UserActionKind = Literal["approve", "edit", "feedback", "finished", "regenerate"]
 
 
 class ThreadHistoryTurn(BaseModel):
@@ -208,6 +218,7 @@ class ThreadHistoryTurn(BaseModel):
     action: Optional[UserActionKind] = None
     human_feedback: Optional[str] = None
     human_edited_segments: Optional[list[dict]] = None
+    target_segment_ids: Optional[list[int]] = None
 
 
 class ThreadHistoryResponse(BaseModel):
