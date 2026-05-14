@@ -14,7 +14,15 @@ from app.core.config import get_settings
 from app.core.cost_log import try_log_seedance_usage
 from app.core.security import decode_access_token
 from app.db.redis import get_redis_client
-from app.models import Generation
+from app.models import (
+    GENERATION_STATUS_CANCELLED,
+    GENERATION_STATUS_EXPIRED,
+    GENERATION_STATUS_FAILED,
+    GENERATION_STATUS_QUEUED,
+    GENERATION_STATUS_SUCCEEDED,
+    GENERATION_TERMINAL_STATUSES,
+    Generation,
+)
 from app.schemas.video_thread import VideoTaskCallbackRequest
 from app.services.notification_service import publish_generation_status
 
@@ -31,7 +39,7 @@ async def process_video_task_callback(payload: VideoTaskCallbackRequest, db: Ses
     status = payload.status
     logger.info("收到方舟回调: task_id=%s, status=%s", task_id, status)
 
-    if status == "succeeded" and payload.usage is not None:
+    if status == GENERATION_STATUS_SUCCEEDED and payload.usage is not None:
         usage_dict = payload.usage.model_dump()
         await try_log_seedance_usage(task_id, status, usage_dict)
 
@@ -79,7 +87,7 @@ async def process_video_task_callback(payload: VideoTaskCallbackRequest, db: Ses
         except Exception:
             logger.warning("推送视频审阅结果更新失败: thread_id=%s", gen.thread_id)
 
-    if status == "succeeded":
+    if status == GENERATION_STATUS_SUCCEEDED:
         continuity_image_url = payload.content.last_frame_url if payload.content and payload.content.last_frame_url else ""
         if gen.thread_id and payload.content and payload.content.last_frame_url:
             await _patch_task_result_last_frame_in_graph(
@@ -88,7 +96,7 @@ async def process_video_task_callback(payload: VideoTaskCallbackRequest, db: Ses
                 payload.content.last_frame_url,
             )
         await continue_sequential_chain(db, task_id, continuity_image_url)
-    elif status in {"failed", "expired", "cancelled"}:
+    elif status in GENERATION_TERMINAL_STATUSES and status != GENERATION_STATUS_SUCCEEDED:
         await fail_remaining_sequential_chain(db, task_id, status)
 
     if gen.thread_id:
@@ -124,7 +132,7 @@ def find_pending_segment_generation(
             Generation.segment_id == segment_id,
             Generation.type == "video",
             Generation.external_id.is_(None),
-            Generation.status == "queued",
+            Generation.status == GENERATION_STATUS_QUEUED,
         )
         .order_by(Generation.id.desc())
         .first()
@@ -148,8 +156,7 @@ def handle_video_task_callback(
         logger.warning("回调找不到对应的 Generation 记录, task_id=%s", task_id)
         return None
 
-    terminal_statuses = {"succeeded", "failed", "expired", "cancelled"}
-    if gen.status in terminal_statuses:
+    if gen.status in GENERATION_TERMINAL_STATUSES:
         logger.info(
             "Generation(id=%s) 已处于终态 '%s'，忽略重复回调 status='%s'",
             gen.id, gen.status, status,
@@ -162,25 +169,25 @@ def handle_video_task_callback(
     )
     gen.status = status
 
-    if status == "succeeded":
+    if status == GENERATION_STATUS_SUCCEEDED:
         if video_url:
             gen.result_url = video_url
         logger.info(
             "任务成功，持久化完整数据: Generation(id=%s), video_url=%s",
             gen.id, video_url,
         )
-    elif status == "failed":
+    elif status == GENERATION_STATUS_FAILED:
         gen.error_message = error_message or "任务失败"
         logger.warning(
             "任务失败: Generation(id=%s), error=%s",
             gen.id, gen.error_message,
         )
-    elif status == "expired":
+    elif status == GENERATION_STATUS_EXPIRED:
         gen.error_message = error_message or "任务超时"
         logger.warning(
             "任务超时: Generation(id=%s)", gen.id,
         )
-    elif status == "cancelled":
+    elif status == GENERATION_STATUS_CANCELLED:
         gen.error_message = error_message or "任务已取消"
         logger.warning(
             "任务取消: Generation(id=%s)", gen.id,
@@ -294,7 +301,7 @@ async def _patch_task_result_status_in_graph(
         )
 
 
-TERMINAL_VIDEO_STATUSES = {"succeeded", "failed", "expired", "cancelled"}
+TERMINAL_VIDEO_STATUSES = set(GENERATION_TERMINAL_STATUSES)
 
 
 def _video_results_ready(state: dict) -> bool:
@@ -369,7 +376,7 @@ async def _append_failed_chain_results(
         if thread_id and isinstance(sid, int):
             gen = find_pending_segment_generation(db, thread_id, sid)
         if gen:
-            gen.status = "failed"
+            gen.status = GENERATION_STATUS_FAILED
             gen.error_message = error_message
             if not gen.external_id:
                 gen.external_id = ext_placeholder
@@ -379,7 +386,7 @@ async def _append_failed_chain_results(
             gen = Generation(
                 shopify_store_id=chain_data.get("store_id", ""),
                 type="video",
-                status="failed",
+                status=GENERATION_STATUS_FAILED,
                 thread_id=thread_id or None,
                 segment_id=sid if isinstance(sid, int) else None,
                 prompt_used=seg.get("description", ""),
@@ -395,7 +402,7 @@ async def _append_failed_chain_results(
             "segment_id": seg.get("segment_id"),
             "task_id": gen.external_id,
             "generation_id": gen.id,
-            "status": "failed",
+            "status": GENERATION_STATUS_FAILED,
             "prompt": seg.get("description", ""),
             "error_message": error_message,
         })
@@ -476,7 +483,7 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, continu
         gen = find_pending_segment_generation(db, thread_id, next_sid)
     if gen:
         gen.external_id = new_task_id
-        gen.status = "queued"
+        gen.status = GENERATION_STATUS_QUEUED
         gen.prompt_used = next_seg.get("description", "")
         db.commit()
         db.refresh(gen)
@@ -484,7 +491,7 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, continu
         gen = Generation(
             shopify_store_id=chain_data.get("store_id", ""),
             type="video",
-            status="queued",
+            status=GENERATION_STATUS_QUEUED,
             thread_id=thread_id or None,
             segment_id=next_sid if isinstance(next_sid, int) else None,
             prompt_used=next_seg.get("description", ""),
@@ -507,7 +514,7 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, continu
         "segment_id": next_seg.get("segment_id"),
         "task_id": new_task_id,
         "generation_id": gen.id,
-        "status": "queued",
+        "status": GENERATION_STATUS_QUEUED,
         "prompt": next_seg.get("description", ""),
     }
     if submit_lf:
@@ -527,7 +534,11 @@ async def continue_sequential_chain(db: Session, completed_task_id: str, continu
         await redis_client.set(f"seq_chain:{new_task_id}", json.dumps(new_chain, ensure_ascii=False), ex=86400)
 
     try:
-        await publish_generation_status(store_id=chain_data.get("store_id", ""), generation_id=gen.id, status="queued")
+        await publish_generation_status(
+            store_id=chain_data.get("store_id", ""),
+            generation_id=gen.id,
+            status=GENERATION_STATUS_QUEUED,
+        )
     except Exception:
         logger.warning("串行续传 WS 推送失败: generation_id=%s", gen.id)
 

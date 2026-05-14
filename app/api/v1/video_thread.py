@@ -173,7 +173,7 @@ async def video_task_callback(
     """
     接收方舟平台 POST 推送的视频任务状态回调。
 
-    状态枚举: queued / running / succeeded / failed / expired。
+    状态枚举: queued / running / succeeded / failed / expired / cancelled。
     当 status=succeeded 时，将完整 generation 数据持久化到数据库。
     若该任务属于串行链条（Redis seq_chain:{task_id}），自动提交下一段。
     方舟平台在 5s 内未收到成功响应时会重试最多 3 次，本接口保证幂等。

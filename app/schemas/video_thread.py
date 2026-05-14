@@ -262,7 +262,7 @@ class VideoTaskCallbackRequest(BaseModel):
     model: Optional[str] = Field(default=None, description="模型名称-版本")
     status: str = Field(
         ...,
-        description="任务状态: queued / running / succeeded / failed / expired",
+        description="任务状态: queued / running / succeeded / failed / expired / cancelled",
     )
     created_at: Optional[int] = Field(default=None, description="创建时间 (Unix 时间戳)")
     updated_at: Optional[int] = Field(default=None, description="更新时间 (Unix 时间戳)")

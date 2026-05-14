@@ -17,6 +17,11 @@ from typing import Any
 
 from langgraph.types import interrupt
 
+from app.models import (
+    GENERATION_STATUS_FAILED,
+    GENERATION_STATUS_QUEUED,
+    GENERATION_TERMINAL_STATUSES,
+)
 from app.services.video_thread_service.video_graph.event_bus import publish_event
 from app.services.video_thread_service.video_graph.state import (
     DEFAULT_CONFIG,
@@ -841,7 +846,7 @@ def _inject_size_constraint_for_submission(
     return with_size
 
 
-TERMINAL_VIDEO_STATUSES = {"succeeded", "failed", "expired", "cancelled"}
+TERMINAL_VIDEO_STATUSES = set(GENERATION_TERMINAL_STATUSES)
 
 
 def _is_video_regeneration(state: VideoGenerationState) -> bool:
@@ -948,7 +953,7 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
         )
         return {
             "task_results": task_results,
-            "final_status": "failed",
+            "final_status": GENERATION_STATUS_FAILED,
             "error": "无剧本片段可提交",
             "current_step": "error",
         }
@@ -1028,7 +1033,7 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
         fail_row: dict[str, Any] = {
             "segment_id": first_seg.get("segment_id"),
             "task_id": "",
-            "status": "failed",
+            "status": GENERATION_STATUS_FAILED,
             "prompt": first_seg.get("description", ""),
             "error_message": "首段视频提交失败",
         }
@@ -1039,7 +1044,7 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
             submitted_results.append({
                 "segment_id": skipped.get("segment_id"),
                 "task_id": "",
-                "status": "failed",
+                "status": GENERATION_STATUS_FAILED,
                 "prompt": skipped.get("description", ""),
                 "error_message": "首段视频提交失败，后续串行段未提交",
             })
@@ -1050,7 +1055,7 @@ async def assemble_and_submit(state: VideoGenerationState) -> dict[str, Any]:
         replaced_segment_ids=replaced_segment_ids,
     )
 
-    all_ok = all(r.get("status") != "failed" for r in submitted_results)
+    all_ok = all(r.get("status") != GENERATION_STATUS_FAILED for r in submitted_results)
     await publish_event(thread_id, "progress", {
         "progress": 95,
         "message": "任务已提交，正在登记生成记录…",
@@ -1109,7 +1114,7 @@ async def respond(state: VideoGenerationState) -> dict[str, Any]:
                 gen = Generation(
                     shopify_store_id=store_id,
                     type="video",
-                    status="queued",
+                    status=GENERATION_STATUS_QUEUED,
                     thread_id=thread_id or None,
                     segment_id=sid,
                     prompt_used=prompt_used,
@@ -1126,18 +1131,18 @@ async def respond(state: VideoGenerationState) -> dict[str, Any]:
             gen.error_message = None
 
             if task_id:
-                gen.status = "queued"
+                gen.status = GENERATION_STATUS_QUEUED
                 gen.external_id = task_id
-                notify_status = "queued"
+                notify_status = GENERATION_STATUS_QUEUED
             elif tr_status == "pending_chain":
-                gen.status = "queued"
+                gen.status = GENERATION_STATUS_QUEUED
                 gen.external_id = None
-                notify_status = "queued"
-            elif tr_status == "failed":
-                gen.status = "failed"
+                notify_status = GENERATION_STATUS_QUEUED
+            elif tr_status == GENERATION_STATUS_FAILED:
+                gen.status = GENERATION_STATUS_FAILED
                 gen.external_id = None
                 gen.error_message = str(tr.get("error_message") or "视频任务提交失败")
-                notify_status = "failed"
+                notify_status = GENERATION_STATUS_FAILED
             else:
                 continue
 
@@ -1150,7 +1155,7 @@ async def respond(state: VideoGenerationState) -> dict[str, Any]:
                     store_id=store_id,
                     generation_id=gen.id,
                     status=notify_status,
-                    error_message=gen.error_message if gen.status == "failed" else None,
+                    error_message=gen.error_message if gen.status == GENERATION_STATUS_FAILED else None,
                 )
             except Exception:
                 logger.warning("WS 推送初始状态失败: generation_id=%s", gen.id)

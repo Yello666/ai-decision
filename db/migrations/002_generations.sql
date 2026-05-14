@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS generations (
   id INT AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
   shopify_store_id VARCHAR(64) NOT NULL COMMENT '所属店铺 ID，多租户隔离',
   type VARCHAR(16) NOT NULL COMMENT '任务类型：video | text',
-  status VARCHAR(32) NOT NULL DEFAULT 'queued' COMMENT '状态：queued | running | succeeded | failed ｜ expired ',
+  status VARCHAR(32) NOT NULL DEFAULT 'queued' COMMENT '状态：queued | running | succeeded | failed | expired | cancelled',
   thread_id VARCHAR(64) NULL COMMENT '所属视频生成会话 ID（仅视频 thread 任务有值）',
   prompt_used TEXT NOT NULL COMMENT '实际发给模型/API 的 prompt',
   trend_snapshot JSON NULL COMMENT '发起任务时的热点快照（TrendObject）',
