@@ -7,6 +7,7 @@
   POST   /video-thread/{thread_id}/resume   注入 human 决策，恢复 Graph
   GET    /video-thread/{thread_id}/state    单次拉取前端视图态（降级兜底）
   GET    /video-thread/{thread_id}/history  回放对话过程（历次草稿 + 用户决策）
+  PATCH  /video-thread/{thread_id}/title    修改历史会话在列表中的展示标题
   GET    /video-thread/{thread_id}/stream   SSE 实时事件流（可带 ?access_token=；亦兼容 Cookie / Bearer）
 """
 from __future__ import annotations
@@ -24,6 +25,7 @@ from app.schemas.video_thread import (
     CreateThreadRequest,
     ResumeThreadRequest,
     UpdateThreadParamsRequest,
+    UpdateThreadTitleRequest,
     VideoThreadStatus,
     VideoTaskCallbackRequest,
 )
@@ -36,6 +38,7 @@ from app.services.video_thread_service import (
     resume_thread_task,
     stream_thread_events_response,
     update_thread_params,
+    update_thread_title,
 )
 
 router = APIRouter(prefix="/video-thread", tags=["video-thread"])
@@ -146,6 +149,24 @@ async def get_thread_history(
     """
     data = await get_thread_conversation_history(thread_id, current_merchant)
     return success(data=data.model_dump(mode="json"))
+
+
+# ──────────────────────────────────────────────
+# PATCH /video-thread/{thread_id}/title
+#   修改历史会话列表/详情中的展示标题（仅索引表，不推进生成流程）
+# ──────────────────────────────────────────────
+@router.patch("/{thread_id}/title", response_model=dict)
+async def patch_thread_title(
+    thread_id: str,
+    payload: UpdateThreadTitleRequest,
+    current_merchant: Merchant = Depends(get_current_merchant),
+):
+    """
+    将 ``video_threads.title`` 更新为用户指定文案，供历史列表与 ``GET .../history`` 展示。
+    传入仅含空白的 ``title`` 时视为清空标题（数据库中为 NULL）。
+    """
+    data = await update_thread_title(thread_id, payload, current_merchant)
+    return success(data=data)
 
 
 # ──────────────────────────────────────────────

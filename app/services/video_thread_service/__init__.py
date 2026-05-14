@@ -7,6 +7,7 @@ from .thread_lifecycle import (
     resume_thread_task,
     stream_thread_events_response,
     update_thread_params,
+    update_thread_title,
 )
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "resume_thread_task",
     "stream_thread_events_response",
     "update_thread_params",
+    "update_thread_title",
 ]

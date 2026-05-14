@@ -134,6 +134,24 @@ class UpdateThreadParamsRequest(BaseModel):
     ] = None
 
 
+_THREAD_TITLE_MAX_LEN = 20
+
+
+class UpdateThreadTitleRequest(BaseModel):
+    """修改历史会话在列表/详情中展示的标题（仅改 MySQL 索引行，不推进 Graph）。"""
+
+    title: str = Field(
+        ...,
+        max_length=_THREAD_TITLE_MAX_LEN,
+        description="新标题；仅空白视为清空（存为 NULL）",
+    )
+
+    @field_validator("title")
+    @classmethod
+    def _strip_title(cls, v: str) -> str:
+        return v.strip()
+
+
 # ─────────────────────────────────────────────────────────────
 # 历史会话（thread）列表
 # ─────────────────────────────────────────────────────────────

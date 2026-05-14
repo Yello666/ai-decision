@@ -23,6 +23,7 @@ from app.schemas.video_thread import (
     ThreadHistoryResponse,
     ThreadHistoryTurn,
     UpdateThreadParamsRequest,
+    UpdateThreadTitleRequest,
     VideoThreadListItem,
     VideoThreadListResponse,
 )
@@ -217,6 +218,24 @@ def _db_get_thread_owner(thread_id: str) -> Optional[VideoThread]:
         return (
             db.query(VideoThread).filter(VideoThread.thread_id == thread_id).first()
         )
+    finally:
+        db.close()
+
+
+def _db_set_thread_title(thread_id: str, title: Optional[str]) -> bool:
+    """更新索引表标题；调用方已做过归属与存在性校验。成功提交返回 True。"""
+    db = SessionLocal()
+    try:
+        row = db.query(VideoThread).filter(VideoThread.thread_id == thread_id).first()
+        if row is None:
+            return False
+        row.title = title
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to set video_thread title: %s", thread_id)
+        return False
     finally:
         db.close()
 
@@ -798,6 +817,24 @@ async def list_video_threads(
         item.final_video_urls = url_map.get(r.thread_id, [])
         items.append(item)
     return VideoThreadListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+async def update_thread_title(
+    thread_id: str,
+    payload: UpdateThreadTitleRequest,
+    merchant: Merchant,
+) -> dict:
+    """修改历史会话展示标题（仅写 ``video_threads.title``）。"""
+    row = await asyncio.to_thread(_db_get_thread_owner, thread_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="thread_not_found")
+    if row.shopify_store_id != merchant.shopify_store_id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    new_title: Optional[str] = payload.title or None
+    ok = await asyncio.to_thread(_db_set_thread_title, thread_id, new_title)
+    if not ok:
+        raise HTTPException(status_code=500, detail="thread_title_update_failed")
+    return {"thread_id": thread_id, "title": new_title}
 
 
 # ─────────────────────────────────────────────────────────────

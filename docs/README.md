@@ -58,7 +58,7 @@ Shopify / 独立前端
 - **商户自有热点**：`app/api/v1/own_hotspot.py`（`/own-hotspot`）与 `hotspot_service/own_hotspot.py`，与全局 YouTube 缓存隔离、按商户维度存储与推荐。
 - **LLM 分析 / 匹配**：`analyse_matching_degree.py`（批匹配、多维度分数与营销建议）；热点分析缓存 `analysis_cache.py`、匹配缓存 `match_cache.py`。热点采集侧的 LLM 清洗与 `analyze_collect_trend_items_async` 等均可能写入用量日志（见下）。
 - **推荐与邮件**：`recommended_hotspots.py`、`recommend_prefs.py`、`recommend_email.py`、定时器 `recommend_email_scheduler.py`。
-- **视频脚本多轮对话**：LangGraph `video_graph/graph.py`、`nodes.py`、`state.py`；SSE `event_bus.py` 与 `app/api/v1/video_thread.py` 的 `stream`。
+- **视频脚本多轮对话**：LangGraph `video_graph/graph.py`、`nodes.py`、`state.py`；SSE `event_bus.py` 与 `app/api/v1/video_thread.py` 的 `stream`。历史列表项标题存 MySQL `video_threads.title`，可通过 **`PATCH /video-thread/{thread_id}/title`** 由商户改名（仅索引表，不推进工作流）。
 - **视频生成**：`seedance_service/seedance2.py`、回调 `video_thread_service/task_callbacks.py`；HTTP `app/api/v1/video_tasks.py`、`app/api/v1/seedance2.py`。
 
 ### 3.4 日志与用量成本记录
