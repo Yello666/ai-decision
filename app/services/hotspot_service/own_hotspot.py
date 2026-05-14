@@ -11,7 +11,13 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from app.models import Hotspot
-from app.schemas.hotspot import BrandObject, HotspotMatchResponse, TrendObject
+from app.schemas.hotspot import (
+    BrandObject,
+    CollectTrendObject,
+    HotspotMatchResponse,
+    ProductOpportunity,
+    TrendObject,
+)
 from app.schemas.own_hotspot import (
     OwnHotspotCreate,
     OwnHotspotOut,
@@ -21,6 +27,7 @@ from app.schemas.own_hotspot import (
 from app.services.hotspot_service.analyse_matching_degree import (
     batch_match_hotspot_for_brand_async,
 )
+from app.services.hotspot_service.collect_hostspot import analyze_collect_trend_items_async
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +151,50 @@ def _own_to_trend_object(item: OwnHotspotOut) -> TrendObject:
         summary=item.summary,
         tags=list(item.tags or []),
         audience=list(item.audience) if item.audience else None,
+        product_opportunities=list(item.product_opportunities or []),
     )
+
+
+def _own_to_collect_trend_object(item: OwnHotspotOut) -> CollectTrendObject:
+    return CollectTrendObject(
+        id=f"own-{item.id}",
+        title=item.title,
+        summary=item.summary,
+        tags=list(item.tags or []),
+        audience=list(item.audience or []),
+        jump_url="",
+        view_count=0,
+        likes=0,
+        publish_time=item.created_at.isoformat() if item.created_at else "",
+        platform="own-hotspot",
+    )
+
+
+async def _with_product_opportunities(
+    candidates: List[OwnHotspotOut],
+) -> List[OwnHotspotOut]:
+    """Generate recommendation-only product opportunities without persisting them."""
+    if not candidates:
+        return []
+
+    collect_items = [_own_to_collect_trend_object(c) for c in candidates]
+    analyzed_items = await analyze_collect_trend_items_async(collect_items)
+    analyzed_by_id = {item.id: item for item in analyzed_items}
+
+    enriched: List[OwnHotspotOut] = []
+    for candidate in candidates:
+        analyzed = analyzed_by_id.get(f"own-{candidate.id}")
+        raw_opportunities = analyzed.product_opportunities if analyzed else []
+        product_opportunities = [
+            ProductOpportunity.model_validate(opportunity)
+            for opportunity in (raw_opportunities or [])
+        ]
+        enriched.append(
+            candidate.model_copy(
+                update={"product_opportunities": product_opportunities}
+            )
+        )
+    return enriched
 
 
 async def build_own_recommended_hotspots(
@@ -168,6 +218,7 @@ async def build_own_recommended_hotspots(
     if not candidates:
         return [], 0
 
+    candidates = await _with_product_opportunities(candidates)
     trends = [_own_to_trend_object(c) for c in candidates]
     matches: List[HotspotMatchResponse] = await batch_match_hotspot_for_brand_async(
         trends=trends,

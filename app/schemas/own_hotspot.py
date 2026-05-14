@@ -3,7 +3,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from app.schemas.hotspot import HotspotMatchResponse
+from app.schemas.hotspot import HotspotMatchResponse, ProductOpportunity
 
 
 class OwnHotspotCreate(BaseModel):
@@ -33,6 +33,10 @@ class OwnHotspotOut(BaseModel):
     summary: str
     tags: List[str] = Field(default_factory=list)
     audience: List[str] = Field(default_factory=list)
+    product_opportunities: List[ProductOpportunity] = Field(
+        default_factory=list,
+        description="推荐接口中生成的热点商品机会；普通 CRUD 返回为空列表",
+    )
     created_at: Optional[datetime] = None
 
 
