@@ -28,6 +28,7 @@ def _collect_to_trend_object(item: CollectTrendObject) -> TrendObject:
         summary=item.summary,
         tags=list(item.tags or []),
         audience=item.audience,
+        product_opportunities=list(item.product_opportunities or []),
     )
 
 

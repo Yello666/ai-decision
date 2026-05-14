@@ -44,7 +44,7 @@ def _normalize_platforms(platforms: List[str] | None) -> List[str]:
 
 
 def _cache_key(platforms: List[str]) -> str:
-    return f"{HOT_TRENDS_PREFIX}{','.join(platforms)}"
+    return f"{HOT_TRENDS_PREFIX}{settings.HOT_TRENDS_ANALYSIS_VERSION}:{','.join(platforms)}"
 
 
 def _serialize(data: List[CollectTrendObject]) -> str:

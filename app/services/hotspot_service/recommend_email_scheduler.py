@@ -117,6 +117,7 @@ def _to_trend_object_for_fp(item) -> TrendObject:
         summary=item.summary,
         tags=list(item.tags or []),
         audience=item.audience,
+        product_opportunities=list(getattr(item, "product_opportunities", []) or []),
     )
 
 

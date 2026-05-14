@@ -102,10 +102,10 @@ class Settings(BaseSettings):
     PRELOADING_HOT_TRENDS: bool = False
     #热点分析缓存7天过期（调用大模型对热点进行总结）
     HOT_TRENDS_ANALYSIS_CACHE_TTL_SECONDS: int = 7 * 24 * 3600
-    HOT_TRENDS_ANALYSIS_VERSION: str = "v1"
+    HOT_TRENDS_ANALYSIS_VERSION: str = "v2"
     #热点与品牌匹配度计算7天过期（调用大模型对热点和品牌进行匹配度计算）
     HOT_TRENDS_MATCH_CACHE_TTL_SECONDS: int = 7 * 24 * 3600
-    HOT_TRENDS_MATCH_VERSION: str = "v2"
+    HOT_TRENDS_MATCH_VERSION: str = "v3"
 
     # ------------------------------
     # 邮件

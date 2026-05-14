@@ -13,6 +13,7 @@ from app.models import Hotspot
 from app.core.config import get_settings
 from app.core.cost_log import log_llm_usage
 from app.schemas.hotspot import (
+    ExecutionFeasibility,
     HotspotMatchResponse,
     TrendObject,
     BrandObject,
@@ -177,12 +178,15 @@ async def _llm_match_single_brand_async(
 目标受众：{', '.join(brand.audience) if brand.audience else '未提供'}
 
 你将只为每个热点输出分项评分与文案；综合契合度总分由系统在服务端按固定权重自动计算，请勿输出 compatibility_score。
+你还需要输出 execution_feasibility，用于说明该品牌围绕热点商品机会进行生产/销售的可执行性；该字段不参与综合契合度总分。
 
 分项维度说明（均为 0-100 浮点数）：
 - business_relevance：热点与品牌品类、产品、使用场景的「业务相关性」。是否存在自然、可信的产品或场景切入点（例如热点讨论芥末味咖啡而品牌正好卖咖啡，则该项应偏高）。
 - audience_overlap：热点受众画像与品牌目标用户的重合度。
 - brand_voice_fit：热点常见的表达方式、气质是否与品牌调性一致（同品类下，接地气热点配接地气品牌该项更高）。
 - marketing_risk：营销风险；越高表示跟风蹭热点时越可能出现公关、舆情、合规或价值观层面的问题。
+- execution_feasibility.score：品牌做出或销售热点商品机会的可执行性，0-100；依据主要售卖产品、供应链可能性、受众匹配、商品形态贴合度判断，不参与 compatibility_score。
+- execution_feasibility.reason：两句话左右说明品牌制作/销售这些商品机会的难易程度、优势与限制。
 
 输出格式要求：
 - 严格输出 JSON，不要任何多余解释/前后缀。
@@ -196,7 +200,11 @@ async def _llm_match_single_brand_async(
   "marketing_risk": Float,           // 0-100，越高风险越大
   "suggestion": String,              // 若要借势该热点，建议从什么营销角度切入
   "reason": String,                  // 简短分析理由（为何给出上述分数）
-  "risk_warning": String             // 可选：有明显风险时一两句风险提示；无则填空字符串 ""
+  "risk_warning": String,            // 可选：有明显风险时一两句风险提示；无则填空字符串 ""
+  "execution_feasibility": {{
+    "score": Float,                  // 0-100，不参与 compatibility_score
+    "reason": String                 // 品牌制作/销售相关热点商品的可执行性说明
+  }}
 }}
 """
 
@@ -207,12 +215,16 @@ async def _llm_match_single_brand_async(
             "summary": t.summary,
             "tags": t.tags,
             "audience": t.audience,
+            "product_opportunities": [
+                p.model_dump(mode="json")
+                for p in (t.product_opportunities or [])
+            ],
         }
         for i, t in enumerate(trends)
     ]
     user_prompt = (
         "【待评估热点列表】每项字段含义：title=热点标题，summary=摘要，tags=标签，"
-        "audience=热点受众画像（可选）。\n"
+        "audience=热点受众画像（可选），product_opportunities=该热点可能借势销售的商品机会（可为空）。\n"
         f"{json.dumps(items_data, ensure_ascii=False)}"
     )
 
@@ -267,6 +279,7 @@ def _build_match_response(
         "marketing_risk",
         "suggestion",
         "reason",
+        "execution_feasibility",
     ]
     for key in required:
         if key not in raw:
@@ -287,6 +300,7 @@ def _build_match_response(
 
     rw = raw.get("risk_warning")
     risk_warning = rw if isinstance(rw, str) and rw.strip() else None
+    execution_feasibility = _build_execution_feasibility(raw["execution_feasibility"])
 
     return HotspotMatchResponse(
         brand_name=brand.name,
@@ -297,4 +311,18 @@ def _build_match_response(
         reason=raw["reason"],
         suggestion=raw["suggestion"],
         risk_warning=risk_warning,
+        execution_feasibility=execution_feasibility,
+    )
+
+
+def _build_execution_feasibility(raw: Any) -> ExecutionFeasibility:
+    """Normalize LLM feasibility output and clamp score to the public 0-100 contract."""
+    if not isinstance(raw, dict):
+        raise TypeError("execution_feasibility 必须是对象")
+    reason = raw.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("execution_feasibility.reason 不能为空")
+    return ExecutionFeasibility(
+        score=_clamp_dimension_0_100(raw.get("score")),
+        reason=reason.strip(),
     )

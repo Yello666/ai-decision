@@ -10,7 +10,8 @@ from app.core.config import get_settings
 from app.core.cost_log import log_llm_usage
 from app.schemas.hotspot import (
     SentimentCN,
-    CollectTrendObject
+    CollectTrendObject,
+    ProductOpportunity,
 )
 from app.services.hotspot_service.analysis_cache import (
     mget_analysis,
@@ -191,7 +192,45 @@ def _apply_analysis_to_item(item: CollectTrendObject, analysis_res: Dict[str, An
     if item.view_count == 0 and item.likes == 0:
         item.warning_message = "暂无更多信息，建议前往平台进行搜索。"
     item.audience = analysis_res.get("audience", [])
+    item.product_opportunities = _normalize_product_opportunities(
+        analysis_res.get("product_opportunities")
+    )
     return True
+
+
+def _normalize_product_opportunities(raw: Any) -> List[ProductOpportunity]:
+    """Best-effort parse of LLM product opportunities; invalid rows are ignored."""
+    if not isinstance(raw, list):
+        return []
+
+    opportunities: List[ProductOpportunity] = []
+    for item in raw[:3]:
+        if not isinstance(item, dict):
+            continue
+        data = {
+            "product_name": str(item.get("product_name") or "").strip(),
+            "reason": str(item.get("reason") or "").strip(),
+            "target_audience": str(item.get("target_audience") or "").strip(),
+            "production_difficulty": str(item.get("production_difficulty") or "").strip(),
+            "selling_points": item.get("selling_points") if isinstance(item.get("selling_points"), list) else [],
+        }
+        data["selling_points"] = [
+            str(point).strip()
+            for point in data["selling_points"]
+            if str(point).strip()
+        ]
+        if not all(
+            data[key]
+            for key in ("product_name", "reason", "target_audience", "production_difficulty")
+        ):
+            continue
+        try:
+            opportunities.append(ProductOpportunity.model_validate(data))
+        except Exception:
+            logger.warning("忽略格式异常的商品机会: %s", item)
+            continue
+    return opportunities
+
 
 def _build_analysis_prompt(content_list: List[Dict[str, Any]]) -> str:
     return f"""
@@ -217,6 +256,11 @@ def _build_analysis_prompt(content_list: List[Dict[str, Any]]) -> str:
            warning_message：固定输出“无”。
     4. 受众画像推断 (Audience Inference): 
        推断 3-5 个具体的关注该热点的人群标签 (如："18-35岁职场女性", "硬核科技粉", "母婴成分党")，拒绝使用“网民”、“大众”等泛词。
+    5. 商品机会建议 (Product Opportunities):
+       - 为每个安全可营销的热点输出 1-3 个可能借势销售的商品机会。
+       - 商品可以是具体单品、套装或周边，但必须与热点内容有自然关联。
+       - production_difficulty 只描述该商品本身的通用制作难易程度，约两句话；不要判断具体品牌能不能做。
+       - selling_points 输出 2-5 个简短卖点。
 
     Output Format:
     - Strict JSON only. No markdown formatting (do not use ```json), no explanations.
@@ -232,7 +276,16 @@ def _build_analysis_prompt(content_list: List[Dict[str, Any]]) -> str:
        "risk_category": "String (Must be one of: RED_LINE, YELLOW_OPPORTUNITY, GREEN_SAFE)", 
        "is_safe_for_marketing": Boolean, 
        "warning_message": "String", 
-       "audience": ["String", "String", ...] 
+       "audience": ["String", "String", ...],
+       "product_opportunities": [
+          {{
+             "product_name": "String",
+             "reason": "String",
+             "target_audience": "String",
+             "production_difficulty": "String",
+             "selling_points": ["String", "String", ...]
+          }}
+       ]
     }}
 
     # Input Data 

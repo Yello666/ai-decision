@@ -8,7 +8,7 @@ Key 设计：
 
 - version：模型/Prompt 升级时切换即可整体失效
 - brand_fp：品牌核心字段的短 hash
-- trend_fp：热点核心字段的短 hash（title+summary+tags+audience）
+- trend_fp：热点核心字段的短 hash（title+summary+tags+audience+product_opportunities）
 """
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ _MATCH_CACHE_PAYLOAD_KEYS = frozenset(
         "marketing_risk",
         "suggestion",
         "reason",
+        "execution_feasibility",
     },
 )
 
@@ -68,6 +69,10 @@ def trend_fingerprint(trend: TrendObject) -> str:
             "summary": (trend.summary or "").strip(),
             "tags": sorted([t.strip() for t in (trend.tags or []) if t and t.strip()]),
             "audience": sorted([a.strip() for a in (trend.audience or []) if a and a.strip()]),
+            "product_opportunities": [
+                p.model_dump(mode="json")
+                for p in (trend.product_opportunities or [])
+            ],
         },
         ensure_ascii=False,
         sort_keys=True,

@@ -23,6 +23,23 @@ class RiskEnum(str,Enum):
     green="GREEN_SAFE"
     none="NONE"
 
+
+class ProductOpportunity(BaseModel):
+    product_name: str = Field(..., description="建议商品名称")
+    reason: str = Field(..., description="该热点适合卖这个商品的原因")
+    target_audience: str = Field(..., description="商品机会面向的目标人群")
+    production_difficulty: str = Field(
+        ...,
+        description="商品本身的通用制作难易程度，约两句话；不针对具体品牌",
+    )
+    selling_points: List[str] = Field(default_factory=list, description="商品卖点")
+
+
+class ExecutionFeasibility(BaseModel):
+    score: float = Field(..., ge=0, le=100, description="品牌执行该热点商品机会的可行性分数（0-100）")
+    reason: str = Field(..., description="品牌制作/销售相关热点商品的可执行性说明")
+
+
 #没有id和跳转链接
 # 输入给大模型作判断的热点，尽量精简减少token消耗
 class TrendObject(BaseModel):
@@ -37,6 +54,10 @@ class TrendObject(BaseModel):
     audience: Optional[List[str]] = Field(
         default=None,
         description="热点受众画像（平台推断或内容归纳的人群标签，可选）",
+    )
+    product_opportunities: List[ProductOpportunity] = Field(
+        default_factory=list,
+        description="该热点可尝试销售的商品机会列表",
     )
     #需要audience，因为这个比tag要精确很多
 
@@ -54,6 +75,10 @@ class CollectTrendObject(BaseModel):
     audience: Optional[List[str]] = Field(
         default=None,
         description="热点受众画像（平台推断或内容归纳的人群标签，可选）",
+    )
+    product_opportunities: List[ProductOpportunity] = Field(
+        default_factory=list,
+        description="该热点可尝试销售的商品机会列表",
     )
 
     risk_category: RiskEnum = Field(default=RiskEnum.none, description="营销风险评估")
@@ -259,6 +284,10 @@ class HotspotMatchResponse(BaseModel):
         description="营销切入点建议：若要借势该热点，建议从何种角度传达品牌或产品",
     )
     risk_warning: Optional[str] = Field(default=None, description="风险提示（如存在公关风险）")
+    execution_feasibility: ExecutionFeasibility = Field(
+        ...,
+        description="品牌围绕该热点商品机会进行生产/销售的可执行性；不参与契合度总分计算",
+    )
 
 
 class HotspotRecommendRequest(BaseModel):
@@ -400,4 +429,3 @@ class HotspotEvaluateResponse(BaseModel):
     analysis: str = Field(..., description="结果分析")
     category_match: float = Field(..., ge=0, le=1, description="品类匹配度（0-1）")
     keyword_similarity: float = Field(..., ge=0, le=1, description="关键词相似度（0-1）")
-

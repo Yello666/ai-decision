@@ -14,6 +14,43 @@ from app.schemas.hotspot import HotspotRecommendedItem
 logger = logging.getLogger(__name__)
 
 
+def _format_product_opportunities_text(item: HotspotRecommendedItem) -> str:
+    opportunities = item.trend.product_opportunities or []
+    if not opportunities:
+        return "暂无"
+    parts: list[str] = []
+    for opportunity in opportunities:
+        selling_points = "、".join(opportunity.selling_points) if opportunity.selling_points else "暂无"
+        parts.append(
+            f"{opportunity.product_name}（人群：{opportunity.target_audience}；"
+            f"原因：{opportunity.reason}；制作难度：{opportunity.production_difficulty}；"
+            f"卖点：{selling_points}）"
+        )
+    return "；".join(parts)
+
+
+def _format_product_opportunities_html(item: HotspotRecommendedItem) -> str:
+    opportunities = item.trend.product_opportunities or []
+    if not opportunities:
+        return "暂无"
+    rows = []
+    for opportunity in opportunities:
+        selling_points = "、".join(opportunity.selling_points) if opportunity.selling_points else "暂无"
+        rows.append(
+            f"<strong>{opportunity.product_name}</strong><br>"
+            f"人群：{opportunity.target_audience}<br>"
+            f"原因：{opportunity.reason}<br>"
+            f"制作难度：{opportunity.production_difficulty}<br>"
+            f"卖点：{selling_points}"
+        )
+    return "<hr style='border:none;border-top:1px solid #eee;margin:6px 0;'>".join(rows)
+
+
+def _format_execution_feasibility(item: HotspotRecommendedItem) -> str:
+    feasibility = item.match.execution_feasibility
+    return f"{feasibility.score} - {feasibility.reason}"
+
+
 def _build_text_body(
     *,
     merchant_name: str,
@@ -38,6 +75,8 @@ def _build_text_body(
                 f"   推荐等级: {item.match.recommendation.value}",
                 f"   推荐原因: {item.match.reason}",
                 f"   营销建议: {item.match.suggestion}",
+                f"   商品机会: {_format_product_opportunities_text(item)}",
+                f"   可执行性: {_format_execution_feasibility(item)}",
                 "   匹配链接: 链接功能未完善，敬请期待",
                 f"   跳转链接: {item.trend.jump_url}",
                 "",
@@ -72,6 +111,8 @@ def _build_html_body(
               <td style="padding:8px;border:1px solid #ddd;">{item.match.recommendation.value}</td>
               <td style="padding:8px;border:1px solid #ddd;">{item.match.reason}</td>
               <td style="padding:8px;border:1px solid #ddd;">{item.match.suggestion}</td>
+              <td style="padding:8px;border:1px solid #ddd;">{_format_product_opportunities_html(item)}</td>
+              <td style="padding:8px;border:1px solid #ddd;">{_format_execution_feasibility(item)}</td>
               <td style="padding:8px;border:1px solid #ddd;">链接功能未完善，敬请期待</td>
               <td style="padding:8px;border:1px solid #ddd;">
                 <a href="{item.trend.jump_url}" target="_blank">查看热点</a>
@@ -81,7 +122,7 @@ def _build_html_body(
         )
 
     table_rows = "\n".join(rows) if rows else (
-        "<tr><td colspan='8' style='padding:8px;border:1px solid #ddd;'>"
+        "<tr><td colspan='10' style='padding:8px;border:1px solid #ddd;'>"
         "无符合阈值的热点，请适当降低筛选分数后重试。"
         "</td></tr>"
     )
@@ -104,6 +145,8 @@ def _build_html_body(
             <th style="padding:8px;border:1px solid #ddd;">推荐等级</th>
             <th style="padding:8px;border:1px solid #ddd;">推荐原因</th>
             <th style="padding:8px;border:1px solid #ddd;">营销建议</th>
+            <th style="padding:8px;border:1px solid #ddd;">商品机会</th>
+            <th style="padding:8px;border:1px solid #ddd;">可执行性</th>
             <th style="padding:8px;border:1px solid #ddd;">匹配链接</th>
             <th style="padding:8px;border:1px solid #ddd;">链接</th>
           </tr>
@@ -149,4 +192,3 @@ def send_recommendation_email(
     if not ok:
         logger.warning("热点推荐邮件发送失败 merchant=%s email=%s", merchant_name, merchant_email)
     return ok
-
