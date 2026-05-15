@@ -97,8 +97,8 @@ class Settings(BaseSettings):
     # ------------------------------
     # 热点缓存
     # ------------------------------
-    #热点逻辑缓存10分钟过期（直接用API抓取的热点）
-    HOT_TRENDS_LOGICAL_TTL_SECONDS: int = 600
+    #热点逻辑缓存2小时过期（直接用API抓取的热点）
+    HOT_TRENDS_LOGICAL_TTL_SECONDS: int = 7200
     PRELOADING_HOT_TRENDS: bool = False
     #热点分析缓存7天过期（调用大模型对热点进行总结）
     HOT_TRENDS_ANALYSIS_CACHE_TTL_SECONDS: int = 7 * 24 * 3600
