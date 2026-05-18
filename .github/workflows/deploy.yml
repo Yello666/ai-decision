@@ -10,6 +10,7 @@ env:
 
 jobs:
   build-and-push:
+    if: github.repository == 'Yello666/ai-decision'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -37,6 +38,7 @@ jobs:
           docker push ${{ env.ACR_REPO }}:latest
 
   deploy-to-ecs:
+    if: github.repository == 'Yello666/ai-decision'
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
