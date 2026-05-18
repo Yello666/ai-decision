@@ -205,7 +205,7 @@ def _item_to_collect_trend(item: dict[str, Any]) -> CollectTrendObject | None:
         sentiment_label=SentimentCN.neutral,
         sentiment_score=0.0,
         audience=None,
-        jump_url=_build_jump_url(item, video_id),
+        jump_url=item.get("webVideoUrl") or "",
         view_count=_as_int(_first_value(item, ("playCount", "plays", "views", "stats.playCount"))),
         likes=_as_int(_first_value(item, ("diggCount", "diggs", "likes", "stats.diggCount"))),
         comment_count=_as_int(_first_value(item, ("commentCount", "comments", "stats.commentCount"))),
@@ -219,6 +219,7 @@ def _item_to_collect_trend(item: dict[str, Any]) -> CollectTrendObject | None:
         ),
         publish_time=publish_time,
         platform="TikTok",
+        thumbnail_url=(item.get("videoMeta") or {}).get("coverUrl") or "",
     )
 
 

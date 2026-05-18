@@ -95,6 +95,7 @@ class CollectTrendObject(BaseModel):
     duration_seconds: float = Field(default=0.0, description="视频时长（秒）")
     publish_time: str = Field(..., description="发布时间（ISO格式，如：2026-02-12T10:00:00）")
     platform: str = Field(..., description="热点搜集平台，如Youtube")
+    thumbnail_url: str = Field(default="", description="视频缩略图/封面图 URL")
 
 
 class BrandObject(BaseModel):
