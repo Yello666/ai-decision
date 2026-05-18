@@ -25,6 +25,8 @@ from app.schemas.hotspot import (
     RecommendEmailScheduleMode,
     TikTokHashtagTrendRequest,
     TikTokHashtagTrendResponse,
+    TikTokHashtagRecommendRequest,
+    TikTokHashtagRecommendResponse,
 )
 from app.services.hotspot_service.analyse_matching_degree import (
     batch_match_hotspot_for_brand_async,
@@ -32,7 +34,10 @@ from app.services.hotspot_service.analyse_matching_degree import (
 from app.services.hotspot_service.collect_hostspot import collect_and_format_hot_data_async
 from app.services.hotspot_service.get_tiktok_trends import collect_tiktok_hashtag_trends_async
 from app.services.hotspot_service.recommend_prefs import get_recommend_prefs, sync_recommend_prefs
-from app.services.hotspot_service.recommended_hotspots import build_recommended_hotspots
+from app.services.hotspot_service.recommended_hotspots import (
+    build_recommended_hotspots,
+    build_recommended_tiktok_hashtags,
+)
 from app.services.merchant_service import get_brand_by_merchant_id
 
 router = APIRouter(prefix="/hotspot", tags=["hotspot"])
@@ -371,4 +376,58 @@ async def get_recommend_email_schedule(
         last_sent_at=None,
         last_triggered_at=None,
     )
+
+
+@router.post(
+    "/tiktok/hashtag/recommend",
+    response_model=TikTokHashtagRecommendResponse,
+    summary="TikTok Hashtag 热点推荐（抓取后按品牌契合度过滤）",
+)
+async def recommend_tiktok_hashtag_hotspots(
+    request: TikTokHashtagRecommendRequest,
+    current_merchant: Merchant = Depends(get_current_merchant),
+    db: Session = Depends(get_db),
+):
+    """
+    按请求中的 hashtags 抓取 TikTok 热点（命中 TikTok 分析缓存则跳过 Apify/分析），
+    对排序截断后的候选做品牌匹配，返回契合度不低于 min_compatibility_score 的条目。
+    无符合条件时返回 200 与空 items 列表。
+    """
+    brand_model = get_brand_by_merchant_id(db, current_merchant.id)
+    if not brand_model:
+        raise HTTPException(status_code=400, detail="brand_not_set")
+
+    await sync_recommend_prefs(
+        current_merchant.id,
+        request.min_compatibility_score,
+    )
+
+    brand = BrandObject(
+        name=brand_model.name,
+        core_value=brand_model.core_value,
+        mainly_sold_products=brand_model.mainly_sold_products,
+        tone=brand_model.tone,
+        audience=brand_model.audience.split(",") if brand_model.audience else [],
+    )
+
+    try:
+        items = await build_recommended_tiktok_hashtags(
+            request=request,
+            min_compatibility_score=request.min_compatibility_score,
+            brand=brand,
+        )
+        return TikTokHashtagRecommendResponse(
+            items=items,
+            min_compatibility_score=request.min_compatibility_score,
+        )
+    except Exception as e:
+        logger.exception(
+            "TikTok hashtag 推荐失败 merchant_id=%s brand=%s hashtags=%s min_compatibility_score=%s",
+            current_merchant.id,
+            brand_model.name,
+            request.hashtags,
+            request.min_compatibility_score,
+        )
+        msg = str(e).replace("\n", " ").replace("\\n", " ").strip()
+        raise HTTPException(status_code=500, detail=f"TikTok 热点推荐失败：{msg}")
 

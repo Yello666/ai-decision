@@ -12,12 +12,14 @@ from app.schemas.hotspot import (
     CollectTrendObject,
     HotspotMatchResponse,
     HotspotRecommendedItem,
+    TikTokHashtagTrendRequest,
     TrendObject,
 )
 from app.services.hotspot_service.analyse_matching_degree import (
     batch_match_hotspot_for_brand_async,
 )
 from app.services.hotspot_service.collect_hostspot import collect_and_format_hot_data_async
+from app.services.hotspot_service.get_tiktok_trends import collect_tiktok_hashtag_trends_async
 
 logger = logging.getLogger(__name__)
 
@@ -72,3 +74,39 @@ async def build_recommended_hotspots(
             items.append(HotspotRecommendedItem(trend=trend_obj, match=match_obj))
 
     return items, analyzed_count
+
+
+async def build_recommended_tiktok_hashtags(
+    *,
+    request: TikTokHashtagTrendRequest,
+    min_compatibility_score: float,
+    brand: BrandObject,
+) -> List[HotspotRecommendedItem]:
+    """
+    按 hashtag 抓取参数获取 TikTok 热点（含分析结果缓存），再对当前批候选做品牌匹配并按契合度过滤。
+    候选条数由 request.max_results 与 request.sort.limit 决定（见 collect_tiktok_hashtag_trends_async）。
+    """
+    candidates: List[CollectTrendObject] = await collect_tiktok_hashtag_trends_async(request)
+    if not candidates:
+        return []
+
+    trends = [_collect_to_trend_object(t) for t in candidates]
+    matches: List[HotspotMatchResponse] = await batch_match_hotspot_for_brand_async(
+        trends=trends,
+        brand=brand,
+    )
+
+    if len(matches) != len(candidates):
+        logger.error(
+            "TikTok 推荐匹配结果条数与候选不一致 candidates=%d matches=%d",
+            len(candidates),
+            len(matches),
+        )
+        raise RuntimeError("TikTok 热点匹配结果条数异常")
+
+    items: List[HotspotRecommendedItem] = []
+    for trend_obj, match_obj in zip(candidates, matches):
+        if match_obj.compatibility_score >= min_compatibility_score:
+            items.append(HotspotRecommendedItem(trend=trend_obj, match=match_obj))
+
+    return items

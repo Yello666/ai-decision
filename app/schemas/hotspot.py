@@ -309,6 +309,27 @@ class HotspotRecommendedItem(BaseModel):
     match: HotspotMatchResponse = Field(..., description="与当前商户品牌的匹配结果")
 
 
+class TikTokHashtagRecommendRequest(TikTokHashtagTrendRequest):
+    """按 Hashtag 抓取 TikTok 热点并做品牌匹配推荐；抓取参数同 TikTokHashtagTrendRequest。"""
+
+    min_compatibility_score: float = Field(
+        default=40.0,
+        ge=0.0,
+        le=100.0,
+        description="契合度低于该值的热点不返回",
+    )
+
+
+class TikTokHashtagRecommendResponse(BaseModel):
+    """TikTok Hashtag 热点推荐列表响应。"""
+
+    items: List[HotspotRecommendedItem] = Field(
+        default_factory=list,
+        description="通过契合度阈值后的 TikTok 热点推荐列表",
+    )
+    min_compatibility_score: float = Field(..., description="本次请求使用的最低契合度")
+
+
 class HotspotRecommendResponse(BaseModel):
     """推荐热点列表响应。"""
 

@@ -676,6 +676,8 @@ async def revise_script(state: VideoGenerationState) -> dict[str, Any]:
         "total_duration": total_dur,
         "execution_strategy": "sequential",
         "revision_count": revision_count + 1,
+        "task_results": [],
+        "final_status": None,
         "current_step": "plan_script_done",
     }
 
