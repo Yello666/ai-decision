@@ -11,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from app.core.config import get_settings
 from app.schemas.hotspot import CollectTrendObject, SentimentCN, TikTokHashtagTrendRequest
 from app.services.hotspot_service.collect_hostspot import analyze_collect_trend_items_async
+from app.services.hotspot_service.tiktok_hashtag_cache import get_tiktok_hashtag_analyzed_cached
 
 logger = logging.getLogger(__name__)
 
@@ -327,11 +328,10 @@ def _fetch_tiktok_items(actor_input: dict[str, Any]) -> list[dict[str, Any]]:
     return raw
 
 
-async def collect_tiktok_hashtag_trends_async(
+async def _fetch_parse_analyze_tiktok_hashtags(
     request: TikTokHashtagTrendRequest,
 ) -> list[CollectTrendObject]:
-    """抓取 TikTok hashtag 热点视频，分析后返回统一热点结构。"""
-
+    """抓取 TikTok hashtag 热点视频，并完成统一热点分析（缓存回源用）。"""
     actor_input = _build_hashtag_actor_input(request)
     logger.info(
         "TikTok hashtag 趋势 Actor 入参 hashtags=%s resultsPerPage=%s commentsPerPost=%s",
@@ -358,6 +358,18 @@ async def collect_tiktok_hashtag_trends_async(
         return []
     analyzed = await analyze_collect_trend_items_async(trends)
     logger.info("TikTok hashtag 趋势 LLM/缓存分析后条数=%d", len(analyzed))
+    return analyzed
+
+
+async def collect_tiktok_hashtag_trends_async(
+    request: TikTokHashtagTrendRequest,
+) -> list[CollectTrendObject]:
+    """抓取 TikTok hashtag 热点视频，分析后返回统一热点结构。"""
+
+    analyzed = await get_tiktok_hashtag_analyzed_cached(
+        request,
+        loader=lambda: _fetch_parse_analyze_tiktok_hashtags(request),
+    )
     out = _sort_collect_trends(
         analyzed,
         sort_by=request.sort.sort_by,

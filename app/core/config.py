@@ -106,6 +106,9 @@ class Settings(BaseSettings):
     #热点与品牌匹配度计算7天过期（调用大模型对热点和品牌进行匹配度计算）
     HOT_TRENDS_MATCH_CACHE_TTL_SECONDS: int = 7 * 24 * 3600
     HOT_TRENDS_MATCH_VERSION: str = "v3"
+    # TikTok hashtag 抓取并分析后的整批结果缓存，默认 6 小时
+    TIKTOK_HASHTAG_TRENDS_CACHE_TTL_SECONDS: int = 6 * 3600
+    TIKTOK_HASHTAG_TRENDS_CACHE_VERSION: str = "v1"
 
     # ------------------------------
     # 邮件
@@ -169,11 +172,11 @@ class Settings(BaseSettings):
     # ------------------------------
     # 本地开发专用覆盖配置
     # ------------------------------
-    _LOCAL_MYSQL_HOST: str = "192.168.64.2"
+    _LOCAL_MYSQL_HOST: str = "localhost"
     _LOCAL_MYSQL_PASSWORD: str = "123456"
     _LOCAL_MYSQL_USER: str = "root"
     _LOCAL_MYSQL_PORT: int = 3306
-    _LOCAL_REDIS_HOST: str = "192.168.64.2"
+    _LOCAL_REDIS_HOST: str = "127.0.0.1"
     _LOCAL_REDIS_PASSWORD: str = "123456"
     _LOCAL_SHOPIFY_REDIRECT_URL: str = "http://127.0.0.1:8000/api/v1/auth/shopify/callback"
 
