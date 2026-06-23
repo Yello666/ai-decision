@@ -8,3 +8,5 @@ __pycache__/
 *.py[cod]
 .cursor/*
 logs/
+1.md
+youtube_pic/

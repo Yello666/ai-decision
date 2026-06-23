@@ -66,3 +66,6 @@ psycopg-pool~=3.3.0
 requests~=2.32.5
 langchain-core~=1.2.19
 typing_extensions~=4.15.0
+
+# 选品服务：按频道抽帧取图（需配合系统已安装的 ffmpeg）
+yt-dlp
