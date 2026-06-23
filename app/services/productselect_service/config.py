@@ -37,3 +37,35 @@ FFMPEG_BIN = "D:\\Tools\\ffmpeg-8.1.1-full_build\\ffmpeg-8.1.1-full_build\\bin\\
 
 # 单帧抽取的超时时间（秒），防止个别视频卡死
 FRAME_TIMEOUT_SECONDS = 120
+
+# ------------------------------
+# 识图（DashScope 上的通义千问视觉模型）
+# ------------------------------
+# 视觉模型名称
+VL_MODEL = "qwen-vl-plus"
+# DashScope OpenAI 兼容接口（与项目主配置 LLM_API_URL 一致）
+VL_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+# 单次请求最多携带多少张图片（同一视频的多帧合并送入，给模型更多上下文）
+VL_MAX_IMAGES_PER_REQUEST = 5
+# 抽帧结束后是否自动对该视频的帧做识图（False 时只抽帧，可后续用 run_recognize.py 单独识图）
+ENABLE_RECOGNITION_AFTER_CAPTURE = True
+
+
+def get_vl_api_key() -> str | None:
+    """读取视觉模型 API Key。
+
+    顺序：环境变量 DASHSCOPE_API_KEY / LLM_API_KEY → 项目根 .env 中的同名项。
+    复用项目既有的 LLM_API_KEY（DashScope），无需新增密钥。
+    """
+    import os
+
+    key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("LLM_API_KEY")
+    if key:
+        return key
+    try:
+        from dotenv import dotenv_values
+
+        values = dotenv_values(PROJECT_ROOT / ".env")
+        return values.get("DASHSCOPE_API_KEY") or values.get("LLM_API_KEY")
+    except Exception:
+        return None
