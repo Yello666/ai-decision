@@ -97,13 +97,31 @@ def _parse_json(text: str) -> dict[str, Any]:
     return {"objects": [], "raw_text": cleaned}
 
 
-def recognize_images(image_paths: list[Path]) -> dict[str, Any]:
-    """对一组图片（通常是同一视频的多帧）识别，返回结构化物件清单。"""
+def recognize_images(
+    image_paths: list[Path],
+    known_ip: str | None = None,
+) -> dict[str, Any]:
+    """对一组图片识别，返回结构化物件清单。
+
+    known_ip：若已知这些图片来自某名人/IP（如 Instagram 账号），传入后会提示模型
+    优先围绕该对象判断关联与同款商品，并把它作为 related_ip 的默认参考。
+    """
     if not image_paths:
         return {"objects": []}
 
     picked = image_paths[: config.VL_MAX_IMAGES_PER_REQUEST]
     content: list[dict[str, Any]] = [{"type": "text", "text": _PROMPT}]
+    if known_ip:
+        content.append(
+            {
+                "type": "text",
+                "text": (
+                    f"补充背景：以下图片均来自名人/IP「{known_ip}」的账号，"
+                    f"请优先围绕「{known_ip}」判断同款及关联周边，"
+                    f"识别到的物件 related_ip 若确实属于此人则填「{known_ip}」。"
+                ),
+            }
+        )
     for idx, path in enumerate(picked, start=1):
         # 在每张图前标注其文件名，便于模型在 source_images 中按名回填
         content.append({"type": "text", "text": f"第{idx}张图片，文件名：{path.name}"})
@@ -120,6 +138,8 @@ def recognize_images(image_paths: list[Path]) -> dict[str, Any]:
     result["frame_count"] = len(picked)
     result["images"] = [p.name for p in picked]
     result["token_usage"] = _extract_usage(response)
+    if known_ip:
+        result["known_ip"] = known_ip
     return result
 
 

@@ -51,21 +51,60 @@ VL_MAX_IMAGES_PER_REQUEST = 5
 ENABLE_RECOGNITION_AFTER_CAPTURE = True
 
 
-def get_vl_api_key() -> str | None:
-    """读取视觉模型 API Key。
+# ------------------------------
+# Instagram 名人监控（Apify）
+# ------------------------------
+# 监控池：要监控的 Instagram 名人账号（用户名，含或不含 @ 均可）
+# 默认选了一批时尚/配饰/周边内容丰富、适合电商选品的高影响力账号，可按需替换
+INSTAGRAM_PROFILES: list[str] = [
+    "csgoniko",       # NiKo / Nikola Kovač（CS 电竞选手，置顶监控）
+    "cristiano",      # Cristiano Ronaldo（运动/穿搭/配饰）
+    "kyliejenner",    # Kylie Jenner（美妆/时尚）
+    "kimkardashian",  # Kim Kardashian（时尚/配饰）
+    "kendalljenner",  # Kendall Jenner（时尚/穿搭）
+    "badgalriri",     # Rihanna（Fenty 时尚美妆）
+    "selenagomez",    # Selena Gomez（美妆/穿搭）
+    "zendaya",        # Zendaya（红毯/时尚）
+    "leomessi",       # Lionel Messi（运动/穿搭）
+    "taylorswift",    # Taylor Swift（周边/穿搭）
+    "virat.kohli",    # Virat Kohli（运动/配饰）
+]
+# 每个账号抓取最新多少条帖子
+INSTAGRAM_POSTS_PER_PROFILE = 5
+# 每条帖子最多取多少张图片（轮播帖会有多图）送去识别
+INSTAGRAM_MAX_IMAGES_PER_POST = 4
+# Instagram 图片下载与识别结果的输出目录
+INSTAGRAM_OUTPUT_DIR = PROJECT_ROOT / "instagram_pic"
+# Apify 上的 Instagram 抓取 Actor（可用 "用户名/actor名" 或 actor id）
+APIFY_INSTAGRAM_ACTOR = "apify/instagram-scraper"
 
-    顺序：环境变量 DASHSCOPE_API_KEY / LLM_API_KEY → 项目根 .env 中的同名项。
-    复用项目既有的 LLM_API_KEY（DashScope），无需新增密钥。
-    """
+
+def _read_env(*names: str) -> str | None:
+    """按顺序从环境变量、再从项目根 .env 读取第一个非空值。"""
     import os
 
-    key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("LLM_API_KEY")
-    if key:
-        return key
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
     try:
         from dotenv import dotenv_values
 
         values = dotenv_values(PROJECT_ROOT / ".env")
-        return values.get("DASHSCOPE_API_KEY") or values.get("LLM_API_KEY")
+        for name in names:
+            value = values.get(name)
+            if value:
+                return value
     except Exception:
         return None
+    return None
+
+
+def get_vl_api_key() -> str | None:
+    """读取视觉模型 API Key（复用项目 DashScope 的 LLM_API_KEY，无需新增密钥）。"""
+    return _read_env("DASHSCOPE_API_KEY", "LLM_API_KEY")
+
+
+def get_apify_api_key() -> str | None:
+    """读取 Apify API Key（复用项目 .env 里的 APIFY_API_KEY）。"""
+    return _read_env("APIFY_API_KEY")
