@@ -13,9 +13,12 @@ Instagram（按账号抓帖）:
   5. instagram_apify.py  —— 用 Apify 抓某名人账号最新帖子的图片（复用 .env 的 APIFY_API_KEY）
   6. run_instagram.py    —— 监控池 → 抓帖 → 下载图片 → 识图 入口
 
+聚合:
+  7. run_aggregate.py    —— 扫描所有 recognition.json，汇总成 summary.json / summary.csv（按潜力排序）
+
 公共:
-  - config.py            —— 所有可调参数（频道/监控池/抽帧/识图模型等）
+  - config.py            —— 所有可调参数（频道/监控池/抽帧/识图模型/输出目录等）
   - image_recognition.py —— qwen-vl-plus 识图，支持 known_ip 提示
 
-各入口运行方式见对应文件顶部说明。
+产物统一在 PRODUCT_SELECT_DIR（productSelect/）下；各入口运行方式见对应文件顶部说明。
 """

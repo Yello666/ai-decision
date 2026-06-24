@@ -7,8 +7,11 @@ from pathlib import Path
 # 项目根目录：当前文件位于 app/services/productselect_service/，向上三级即 ai-decision/
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-# 抽帧图片输出目录（按需求保存到 D:\ai-decision\youtube_pic）
-OUTPUT_DIR = PROJECT_ROOT / "youtube_pic"
+# 选品产物统一根目录（便于管理）：D:\ai-decision\productSelect\
+PRODUCT_SELECT_DIR = PROJECT_ROOT / "productSelect"
+
+# YouTube 抽帧图片输出目录
+OUTPUT_DIR = PRODUCT_SELECT_DIR / "youtube_pic"
 
 # 要监控的频道列表，支持三种写法：
 #   - "@MrBeast"                       （频道 handle）
@@ -43,12 +46,40 @@ FRAME_TIMEOUT_SECONDS = 120
 # ------------------------------
 # 视觉模型名称
 VL_MODEL = "qwen-vl-plus"
+
 # DashScope OpenAI 兼容接口（与项目主配置 LLM_API_URL 一致）
 VL_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 # 单次请求最多携带多少张图片（同一视频的多帧合并送入，给模型更多上下文）
 VL_MAX_IMAGES_PER_REQUEST = 5
 # 抽帧结束后是否自动对该视频的帧做识图（False 时只抽帧，可后续用 run_recognize.py 单独识图）
 ENABLE_RECOGNITION_AFTER_CAPTURE = True
+
+
+# ------------------------------
+# 账号/频道 handle → 真人或 IP 的可读名称
+# ------------------------------
+# 识图时把可读名称注入提示词锚定（handle 往往很隐晦，真名锚定更准）。
+# 找不到映射时回退使用原始 handle。键统一用小写、去掉 @。
+IP_DISPLAY_NAMES: dict[str, str] = {
+    "csgoniko": "NiKo（CS 电竞选手 Nikola Kovač）",
+    "cristiano": "C 罗（Cristiano Ronaldo）",
+    "kyliejenner": "Kylie Jenner",
+    "kimkardashian": "Kim Kardashian",
+    "kendalljenner": "Kendall Jenner",
+    "badgalriri": "Rihanna",
+    "selenagomez": "Selena Gomez",
+    "zendaya": "Zendaya",
+    "leomessi": "梅西（Lionel Messi）",
+    "taylorswift": "Taylor Swift",
+    "virat.kohli": "Virat Kohli",
+    "mrbeast": "MrBeast（野兽先生）",
+}
+
+
+def display_name(account: str) -> str:
+    """把账号/频道 handle 映射为可读名称；无映射则回退去掉 @ 的原始 handle。"""
+    key = (account or "").strip().lstrip("@").lower()
+    return IP_DISPLAY_NAMES.get(key, (account or "").strip().lstrip("@"))
 
 
 # ------------------------------
@@ -74,7 +105,7 @@ INSTAGRAM_POSTS_PER_PROFILE = 5
 # 每条帖子最多取多少张图片（轮播帖会有多图）送去识别
 INSTAGRAM_MAX_IMAGES_PER_POST = 4
 # Instagram 图片下载与识别结果的输出目录
-INSTAGRAM_OUTPUT_DIR = PROJECT_ROOT / "instagram_pic"
+INSTAGRAM_OUTPUT_DIR = PRODUCT_SELECT_DIR / "instagram_pic"
 # Apify 上的 Instagram 抓取 Actor（可用 "用户名/actor名" 或 actor id）
 APIFY_INSTAGRAM_ACTOR = "apify/instagram-scraper"
 

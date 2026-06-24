@@ -12,14 +12,16 @@
 运行方式（在项目根目录 D:\\ai-decision 下执行）：
        python -m app.services.productselect_service.run_capture
 
-图片保存到 config.OUTPUT_DIR（默认 D:\\ai-decision\\youtube_pic）下，按 频道/视频ID/ 分目录；
-开启识图后，每个视频目录会额外生成 recognition.json。
+图片保存到 config.OUTPUT_DIR（默认 D:\\ai-decision\\productSelect\\youtube_pic）下，
+按 频道/视频ID/ 分目录；开启识图后，每个视频目录会额外生成 recognition.json。
+已处理过的视频（已存在 recognition.json，或仅抽帧模式下已有图片）会自动跳过，避免重复花钱。
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 from . import config
 from .frame_extractor import capture_frames
@@ -32,6 +34,17 @@ def _setup_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s | %(message)s",
     )
+
+
+def _already_processed(out_dir: Path) -> bool:
+    """去重：判断该视频是否已处理过，避免重复抽帧与重复识图。
+
+    - 开启识图时：以 recognition.json 是否存在为准；
+    - 仅抽帧时：以目录中是否已有抽好的图片为准。
+    """
+    if config.ENABLE_RECOGNITION_AFTER_CAPTURE:
+        return (out_dir / "recognition.json").exists()
+    return out_dir.exists() and any(out_dir.glob("*.jpg"))
 
 
 def run() -> None:
@@ -50,6 +63,9 @@ def run() -> None:
         safe_channel = channel.strip().lstrip("@").replace("/", "_").replace(":", "_")
         for video in videos:
             out_dir = config.OUTPUT_DIR / safe_channel / video.video_id
+            if _already_processed(out_dir):
+                logger.info("跳过已处理视频 video=%s（%s）", video.video_id, video.title)
+                continue
             try:
                 frames = capture_frames(video.video_id, video.url, out_dir)
             except Exception:
@@ -60,7 +76,7 @@ def run() -> None:
 
             if config.ENABLE_RECOGNITION_AFTER_CAPTURE and frames:
                 try:
-                    result = recognize_images(frames)
+                    result = recognize_images(frames, known_ip=config.display_name(channel))
                     result["video_id"] = video.video_id
                     result["title"] = video.title
                     out_path = out_dir / "recognition.json"

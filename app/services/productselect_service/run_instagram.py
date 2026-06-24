@@ -12,8 +12,9 @@
 运行方式（在项目根目录 D:\\ai-decision 下执行）：
        python -m app.services.productselect_service.run_instagram
 
-输出：图片与结果存到 config.INSTAGRAM_OUTPUT_DIR（默认 D:\\ai-decision\\instagram_pic）下，
+输出：图片与结果存到 config.INSTAGRAM_OUTPUT_DIR（默认 D:\\ai-decision\\productSelect\\instagram_pic）下，
 按 账号/帖子ID/ 分目录，每个帖子目录含图片与 recognition.json。
+已处理过的帖子（已存在 recognition.json）会自动跳过，避免重复抓取与重复花钱。
 """
 
 from __future__ import annotations
@@ -73,13 +74,17 @@ def run() -> None:
         safe_user = profile.strip().lstrip("@").replace("/", "_")
         for post in posts:
             post_dir = config.INSTAGRAM_OUTPUT_DIR / safe_user / post.post_id
+            # 去重：该帖子已识图过（recognition.json 存在）则跳过，避免重复抓取与重复花钱
+            if (post_dir / "recognition.json").exists():
+                logger.info("跳过已处理帖子 account=%s post=%s", post.username, post.post_id)
+                continue
             images = _download_images(post, post_dir)
             if not images:
                 logger.warning("帖子无可用图片，跳过 post=%s", post.post_id)
                 continue
 
             try:
-                result = recognize_images(images, known_ip=post.username)
+                result = recognize_images(images, known_ip=config.display_name(post.username))
             except Exception:
                 logger.exception("识图失败 post=%s", post.post_id)
                 continue
