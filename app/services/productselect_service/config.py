@@ -139,3 +139,53 @@ def get_vl_api_key() -> str | None:
 def get_apify_api_key() -> str | None:
     """读取 Apify API Key（复用项目 .env 里的 APIFY_API_KEY）。"""
     return _read_env("APIFY_API_KEY")
+
+
+def get_serpapi_api_key() -> str | None:
+    """读取 SerpApi API Key（复用项目 .env 里的 SERPAPI_API_KEY）。"""
+    return _read_env("SERPAPI_API_KEY")
+
+
+def get_oss_config() -> dict[str, str | None]:
+    """读取阿里云 OSS 配置（复用 .env 的 AK/SK；Endpoint/Bucket 缺省同主项目）。"""
+    return {
+        "ak": _read_env("AK"),
+        "sk": _read_env("SK"),
+        "endpoint": _read_env("Endpoint") or OSS_ENDPOINT,
+        "bucket": _read_env("Bucket") or OSS_BUCKET,
+        "region": OSS_REGION,
+    }
+
+
+# ------------------------------
+# 供应链对齐（裁剪 → OSS → SerpApi Google Lens）
+# ------------------------------
+# 裁剪图本地输出目录
+CROP_OUTPUT_DIR = PRODUCT_SELECT_DIR / "crops"
+# 供应链测试结果输出目录
+SUPPLY_TEST_DIR = PRODUCT_SELECT_DIR / "supply_test"
+
+# 裁剪时在 bbox 四周留的边距比例（0~0.2），稍微留点边识别更稳
+CROP_PADDING_RATIO = 0.04
+
+# OSS（私有 Bucket，上传后用签名 URL 给 SerpApi 抓取）
+OSS_ENDPOINT = "oss-ap-southeast-1.aliyuncs.com"
+OSS_BUCKET = "video-upload-shopai"
+OSS_REGION = "ap-southeast-1"
+OSS_UPLOAD_PREFIX = "productselect/crops/"
+OSS_SIGN_URL_EXPIRE = 3600  # 签名 URL 有效期（秒）；上传后立即调用 Lens，足够
+
+# SerpApi Google Lens
+# type: all（最全，含 visual_matches + related_content）| products | visual_matches | exact_matches
+SERPAPI_LENS_TYPE = "products"
+SERPAPI_LENS_COUNTRY = "us"
+
+# 只对这些潜力等级的物件调用 SerpApi（控制搜索次数与成本）。
+# 例：["high"] 只查高潜力；["high","medium"] 查高+中；置为 [] 或 None 表示不过滤、全部查。
+SUPPLY_POTENTIAL_FILTER: list[str] | None = ["high"]
+
+# 供应链测试入口要处理的图片（相对项目根或绝对路径）
+SUPPLY_TEST_IMAGES: list[str] = [
+    "productSelect/instagram_pic/cristiano/3926051279432646990/3926051279432646990_01.jpg",
+    "productSelect/instagram_pic/csgoniko/3920104545275358222/3920104545275358222_01.jpg",
+]

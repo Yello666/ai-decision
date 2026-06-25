@@ -69,3 +69,5 @@ typing_extensions~=4.15.0
 
 # 选品服务：按频道抽帧取图（需配合系统已安装的 ffmpeg）
 yt-dlp
+# 供应链对齐：按 bbox 裁剪商品小图
+Pillow
