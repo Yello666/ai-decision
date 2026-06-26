@@ -21,6 +21,7 @@ from pathlib import Path
 from . import config
 from .bbox_detect import detect_objects_with_boxes
 from .image_crop import crop_by_norm_box
+from .lens_filter import build_top_matches
 from .oss_uploader import upload_and_sign
 from .serpapi_lens import search_by_image_url
 
@@ -39,12 +40,17 @@ def _resolve_path(p: str) -> Path:
     return path if path.is_absolute() else (config.PROJECT_ROOT / path)
 
 
-def process_image(image_path: Path) -> dict:
+def process_image(
+    image_path: Path,
+    *,
+    potential_filter: list[str] | None = None,
+    lens_type: str | None = None,
+) -> dict:
     """对单张图跑完整链路，返回结构化结果。"""
     detected = detect_objects_with_boxes(image_path)
 
     # 按潜力过滤：只对配置允许的潜力等级查 Lens，控制 SerpApi 调用次数
-    allowed = config.SUPPLY_POTENTIAL_FILTER
+    allowed = config.SUPPLY_POTENTIAL_FILTER if potential_filter is None else potential_filter
     if allowed:
         allowed_set = {s.strip().lower() for s in allowed}
         objects = [o for o in detected if o.get("ecommerce_potential") in allowed_set]
@@ -83,7 +89,14 @@ def process_image(image_path: Path) -> dict:
             continue
 
         try:
-            item["lens"] = search_by_image_url(oss_url)
+            lens = search_by_image_url(oss_url, lens_type=lens_type)
+            item["lens"] = lens
+            item["top_matches"] = build_top_matches(
+                lens,
+                category=item.get("category"),
+                related_ip=item.get("related_ip"),
+                limit=3,
+            )
         except Exception as exc:
             logger.exception("Google Lens 调用失败：%s", oss_url)
             item["error"] = f"lens_failed: {exc}"

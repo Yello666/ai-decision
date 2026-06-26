@@ -19,6 +19,13 @@ from .recommend_email_schedule import (
     MerchantHotspotRecommendEmailDelivery,
     MerchantHotspotRecommendEmailSchedule,
 )
+from .product_select import (
+    ProductSelectContent,
+    ProductSelectImage,
+    ProductSelectMatch,
+    ProductSelectMonitor,
+    ProductSelectObject,
+)
 
 __all__ = [
     "Base",
@@ -38,4 +45,9 @@ __all__ = [
     "VideoThread",
     "MerchantHotspotRecommendEmailSchedule",
     "MerchantHotspotRecommendEmailDelivery",
+    "ProductSelectMonitor",
+    "ProductSelectContent",
+    "ProductSelectImage",
+    "ProductSelectObject",
+    "ProductSelectMatch",
 ]

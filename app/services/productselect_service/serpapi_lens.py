@@ -29,7 +29,10 @@ def _to_plain_dict(results: Any) -> dict[str, Any]:
         return {"raw": str(results)}
 
 
-def search_by_image_url(image_url: str) -> dict[str, Any]:
+def search_by_image_url(
+    image_url: str,
+    lens_type: str | None = None,
+) -> dict[str, Any]:
     """对公网图片 URL 调 Google Lens，返回完整响应 dict。"""
     api_key = config.get_serpapi_api_key()
     if not api_key:
@@ -39,8 +42,9 @@ def search_by_image_url(image_url: str) -> dict[str, Any]:
         "engine": "google_lens",
         "url": image_url,
     }
-    if config.SERPAPI_LENS_TYPE:
-        params["type"] = config.SERPAPI_LENS_TYPE
+    effective_type = lens_type if lens_type is not None else config.SERPAPI_LENS_TYPE
+    if effective_type:
+        params["type"] = effective_type
     if config.SERPAPI_LENS_COUNTRY:
         params["country"] = config.SERPAPI_LENS_COUNTRY
 
