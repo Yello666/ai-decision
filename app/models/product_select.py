@@ -129,7 +129,7 @@ class ProductSelectObject(Base):
 
 
 class ProductSelectMatch(Base):
-    """Product Select 同款/供应链匹配结果。"""
+    """Product Select 同款/商品匹配结果。"""
 
     __tablename__ = "product_select_matches"
 

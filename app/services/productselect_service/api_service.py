@@ -19,7 +19,7 @@ from app.schemas.product_select import (
     InstagramRunRequest,
     MonitorCreateRequest,
     MonitorUpdateRequest,
-    SupplyTestRequest,
+    ProductMatchTestRequest,
 )
 from app.services.productselect_service import config
 from app.services.productselect_service.image_recognition import recognize_images
@@ -31,12 +31,14 @@ from app.services.productselect_service.image_crop import crop_by_norm_box
 from app.services.productselect_service.lens_filter import build_top_matches
 from app.services.productselect_service.oss_uploader import upload_and_sign
 from app.services.productselect_service.repository import (
+    clear_content_artifacts,
     create_image,
     create_matches_from_lens,
     create_object,
     delete_matches_for_object,
     disable_monitor,
     get_image,
+    get_content,
     get_monitor,
     get_object,
     list_matches,
@@ -142,6 +144,40 @@ def match_to_dict(row) -> dict[str, Any]:
     }
 
 
+def image_to_dict(row) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return {
+        "id": row.id,
+        "image_type": row.image_type,
+        "local_path": row.local_path,
+        "oss_key": row.oss_key,
+        "oss_url": row.oss_url,
+        "source_url": row.source_url,
+        "width": row.width,
+        "height": row.height,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def content_to_dict(row) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return {
+        "id": row.id,
+        "monitor_id": row.monitor_id,
+        "platform": row.platform,
+        "external_id": row.external_id,
+        "url": row.url,
+        "caption_or_title": row.caption_or_title,
+        "published_at": row.published_at.isoformat() if row.published_at else None,
+        "status": row.status,
+        "raw_path": row.raw_path,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
 def monitor_to_dict(row) -> dict[str, Any]:
     return {
         "id": row.id,
@@ -155,6 +191,20 @@ def monitor_to_dict(row) -> dict[str, Any]:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
+
+
+def object_detail_to_dict(db: Session, row) -> dict[str, Any]:
+    item = object_to_dict(row)
+    content = get_content(db, row.content_id) if row.content_id else None
+    monitor = get_monitor(db, content.monitor_id) if content and content.monitor_id else None
+    source_image = get_image(db, row.source_image_id) if row.source_image_id else None
+    crop_image = get_image(db, row.crop_image_id) if row.crop_image_id else None
+    item["source_content"] = content_to_dict(content)
+    item["source_monitor"] = monitor_to_dict(monitor) if monitor else None
+    item["source_image"] = image_to_dict(source_image)
+    item["crop_image"] = image_to_dict(crop_image)
+    item["is_test"] = row.content_id is None
+    return item
 
 
 def create_monitor(payload: MonitorCreateRequest, db: Session) -> dict[str, Any]:
@@ -254,6 +304,9 @@ def run_instagram_monitor(payload: InstagramRunRequest, db: Session) -> dict[str
                 db.commit()
                 skipped_posts += 1
                 continue
+
+            if payload.force:
+                clear_content_artifacts(db, content.id)
 
             images = _download_instagram_images(
                 post,
@@ -405,7 +458,7 @@ def _slim_supply_result(result: dict[str, Any]) -> dict[str, Any]:
     return slim
 
 
-def run_supply_test(payload: SupplyTestRequest, db: Session) -> dict[str, Any]:
+def run_supply_test(payload: ProductMatchTestRequest) -> dict[str, Any]:
     config.SUPPLY_TEST_DIR.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
     failed_images = 0
@@ -437,45 +490,6 @@ def run_supply_test(payload: SupplyTestRequest, db: Session) -> dict[str, Any]:
         )
         result_path = str(out_path)
 
-        source_width, source_height = _image_size(image_path)
-        source_image = create_image(
-            db,
-            image_type="source",
-            local_path=str(image_path),
-            width=source_width,
-            height=source_height,
-        )
-        for item in result.get("items") or []:
-            if not isinstance(item, dict):
-                continue
-            crop_path = item.get("crop_path")
-            crop_image_id = None
-            if crop_path:
-                crop_file = Path(crop_path)
-                crop_width, crop_height = _image_size(crop_file)
-                crop_image = create_image(
-                    db,
-                    image_type="crop",
-                    local_path=str(crop_file),
-                    oss_url=item.get("oss_url"),
-                    width=crop_width,
-                    height=crop_height,
-                )
-                crop_image_id = crop_image.id
-
-            obj_row = create_object(
-                db,
-                source_image_id=source_image.id,
-                crop_image_id=crop_image_id,
-                category=item.get("category") or "",
-                related_ip=item.get("related_ip"),
-                ecommerce_potential=item.get("ecommerce_potential") or "medium",
-                bbox=item.get("box") if isinstance(item.get("box"), list) else None,
-            )
-            lens = item.get("lens")
-            if isinstance(lens, dict):
-                create_matches_from_lens(db, object_id=obj_row.id, lens_response=lens)
-
         slim_result = _slim_supply_result(result)
         slim_result["result_path"] = result_path
         results.append(slim_result)
@@ -498,15 +512,33 @@ def read_supply_result(image_stem: str) -> dict[str, Any]:
     return slim
 
 
-def run_object_supply_match(
+def get_object_matches(
     db: Session,
     *,
     object_id: int,
-    force: bool,
+    limit: int,
+) -> dict[str, Any] | None:
+    """查看单个商品机会已有商品匹配，只读数据库，不调用外部服务。"""
+    obj = get_object(db, object_id)
+    if obj is None:
+        return None
+    cached = list_matches(db, object_id=object_id, source="google_lens", limit=limit)
+    return {
+        "object": object_detail_to_dict(db, obj),
+        "top_matches": [match_to_dict(row) for row in cached],
+        "matched_count": len(cached),
+        "from_cache": True,
+    }
+
+
+def refresh_object_matches(
+    db: Session,
+    *,
+    object_id: int,
     lens_type: str,
     limit: int,
 ) -> dict[str, Any] | None:
-    """对单个商品机会触发/读取供应链匹配。
+    """刷新单个商品机会的商品匹配，会调用 OSS + SerpApi 并写入数据库。
 
     优先使用已有 crop 图；没有 crop 但有 source+bbox 时现场裁剪；
     如果没有 bbox，则退化为直接用 source 图跑 Lens。
@@ -514,16 +546,6 @@ def run_object_supply_match(
     obj = get_object(db, object_id)
     if obj is None:
         return None
-
-    if not force:
-        cached = list_matches(db, object_id=object_id, source="google_lens", limit=limit)
-        if cached:
-            return {
-                "object": object_to_dict(obj),
-                "top_matches": [match_to_dict(row) for row in cached],
-                "matched_count": len(cached),
-                "from_cache": True,
-            }
 
     delete_matches_for_object(db, object_id, source="google_lens")
 
@@ -568,7 +590,7 @@ def run_object_supply_match(
         image_url = source_image.oss_url or source_image.source_url
 
     if not image_url:
-        raise ValueError("object 缺少可用于供应链匹配的图片")
+        raise ValueError("object 缺少可用于商品匹配的图片")
 
     lens = search_by_image_url(image_url, lens_type=lens_type)
     create_matches_from_lens(db, object_id=obj.id, lens_response=lens)
@@ -580,7 +602,7 @@ def run_object_supply_match(
         limit=limit,
     )
     return {
-        "object": object_to_dict(obj),
+        "object": object_detail_to_dict(db, obj),
         "top_matches": top_matches,
         "matched_count": len(lens.get("visual_matches") or []),
         "from_cache": False,
@@ -593,6 +615,7 @@ def query_objects(
     potential: str | None,
     related_ip: str | None,
     category: str | None,
+    include_test: bool,
     limit: int,
     offset: int,
 ) -> dict[str, Any]:
@@ -601,11 +624,15 @@ def query_objects(
         potential=potential,
         related_ip=related_ip,
         category=category,
+        include_test=include_test,
         limit=limit,
         offset=offset,
     )
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        items.append(object_detail_to_dict(db, row))
     return {
-        "items": [object_to_dict(row) for row in rows],
+        "items": items,
         "returned_count": len(rows),
     }
 

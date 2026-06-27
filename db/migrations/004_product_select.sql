@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS product_select_objects (
   INDEX idx_pso_category (category)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Product Select 识图物件/商品机会';
 
--- 供应链/同款匹配：Google Lens、Amazon、淘宝/1688 等返回的商品候选
+-- 同款/商品匹配：Google Lens、Amazon、淘宝/1688 等返回的商品候选
 CREATE TABLE IF NOT EXISTS product_select_matches (
   id INT AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
   object_id INT NOT NULL COMMENT '对应识图物件 id',
@@ -107,4 +107,4 @@ CREATE TABLE IF NOT EXISTS product_select_matches (
   INDEX idx_psmatch_source (source),
   INDEX idx_psmatch_price (price),
   INDEX idx_psmatch_match_level (match_level)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Product Select 同款/供应链匹配结果';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Product Select 同款/商品匹配结果';

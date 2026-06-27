@@ -1,6 +1,6 @@
 """Product Select 数据库写入/查询服务层。
 
-这一层只负责把「监控对象、采集内容、图片、识图物件、供应链匹配」这些结构化核心字段
+这一层只负责把「监控对象、采集内容、图片、识图物件、商品匹配」这些结构化核心字段
 落到 MySQL。大 JSON、图片文件本身仍保留在本地/OSS，通过 path/key/url 字段引用。
 """
 
@@ -218,6 +218,36 @@ def upsert_content(
     return _commit_refresh(db, row, commit=commit)
 
 
+def get_content(
+    db: Session,
+    content_id: int,
+) -> ProductSelectContent | None:
+    return db.query(ProductSelectContent).filter(ProductSelectContent.id == content_id).first()
+
+
+def clear_content_artifacts(
+    db: Session,
+    content_id: int,
+    *,
+    commit: bool = True,
+) -> None:
+    """清理某条内容下旧的图片、识图物件与匹配结果。
+
+    用于 force=true 重新识图，避免重复商品机会。先删 objects（matches 外键级联删除），
+    再删 images。
+    """
+    db.query(ProductSelectObject).filter(ProductSelectObject.content_id == content_id).delete(
+        synchronize_session=False
+    )
+    db.query(ProductSelectImage).filter(ProductSelectImage.content_id == content_id).delete(
+        synchronize_session=False
+    )
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+
+
 def create_image(
     db: Session,
     *,
@@ -391,10 +421,13 @@ def list_objects(
     potential: str | None = None,
     related_ip: str | None = None,
     category: str | None = None,
+    include_test: bool = False,
     limit: int = 100,
     offset: int = 0,
 ) -> list[ProductSelectObject]:
     q = db.query(ProductSelectObject)
+    if not include_test:
+        q = q.filter(ProductSelectObject.content_id.is_not(None))
     if potential:
         q = q.filter(ProductSelectObject.ecommerce_potential == potential.strip().lower())
     if related_ip:

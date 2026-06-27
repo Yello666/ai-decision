@@ -76,8 +76,8 @@ class SummaryResponse(BaseModel):
     returned_count: int
 
 
-class SupplyTestRequest(BaseModel):
-    """对指定图片跑「bbox → 裁剪 → OSS → SerpApi Google Lens」。"""
+class ProductMatchTestRequest(BaseModel):
+    """对指定图片测试「bbox → 裁剪 → OSS → SerpApi Google Lens」。"""
 
     images: list[str] = Field(..., min_length=1, description="本地图片路径；支持绝对路径或项目根相对路径")
     potential_filter: list[PotentialLevel] | None = Field(
@@ -87,22 +87,21 @@ class SupplyTestRequest(BaseModel):
     lens_type: LensType = Field(default="products", description="Google Lens type 参数")
 
 
-class SupplyTestResponse(BaseModel):
+class ProductMatchTestResponse(BaseModel):
     processed_images: int
     failed_images: int
     results: list[dict[str, Any]]
     output_dir: str
 
 
-class SupplyMatchRequest(BaseModel):
-    """对单个商品机会触发供应链匹配。"""
+class ProductMatchRefreshRequest(BaseModel):
+    """对单个商品机会刷新商品匹配。"""
 
-    force: bool = Field(default=False, description="false 时若已有匹配则直接返回缓存；true 时重新跑 Lens")
     lens_type: LensType = Field(default="products", description="Google Lens type 参数")
     limit: int = Field(default=3, ge=1, le=20, description="返回前 N 个匹配")
 
 
-class SupplyMatchResponse(BaseModel):
+class ProductMatchResponse(BaseModel):
     object: dict[str, Any]
     top_matches: list[dict[str, Any]]
     matched_count: int

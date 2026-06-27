@@ -13,11 +13,11 @@ from app.schemas.product_select import (
     MonitorUpdateRequest,
     ProductSelectMatchListResponse,
     ProductSelectObjectListResponse,
+    ProductMatchRefreshRequest,
+    ProductMatchResponse,
+    ProductMatchTestRequest,
+    ProductMatchTestResponse,
     SummaryResponse,
-    SupplyMatchRequest,
-    SupplyMatchResponse,
-    SupplyTestRequest,
-    SupplyTestResponse,
 )
 from app.services.productselect_service import api_service
 
@@ -110,20 +110,17 @@ def get_summary(
     return success(SummaryResponse(**data))
 
 
-@router.post("/supply/test", summary="供应链对齐测试：bbox 裁剪 + OSS + Google Lens")
-def run_supply_test(
-    payload: SupplyTestRequest,
-    db: Session = Depends(get_db),
-):
-    return success(SupplyTestResponse(**api_service.run_supply_test(payload, db)))
+@router.post("/matches/test", summary="商品匹配测试：bbox 裁剪 + OSS + Google Lens")
+def run_match_test(payload: ProductMatchTestRequest):
+    return success(ProductMatchTestResponse(**api_service.run_supply_test(payload)))
 
 
-@router.get("/supply/result/{image_stem}", summary="读取某张图的供应链测试结果")
-def get_supply_result(image_stem: str):
+@router.get("/matches/test/result/{image_stem}", summary="读取某张图的商品匹配测试结果")
+def get_match_test_result(image_stem: str):
     try:
         data = api_service.read_supply_result(image_stem)
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="供应链测试结果不存在")
+        raise HTTPException(status_code=404, detail="商品匹配测试结果不存在")
     return success(data)
 
 
@@ -132,6 +129,7 @@ def get_objects(
     potential: str | None = Query(default=None, description="high/medium/low"),
     related_ip: str | None = Query(default=None, description="关联名人/IP"),
     category: str | None = Query(default=None, description="品类"),
+    include_test: bool = Query(default=False, description="是否包含商品匹配测试产生的测试对象"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -141,13 +139,14 @@ def get_objects(
         potential=potential,
         related_ip=related_ip,
         category=category,
+        include_test=include_test,
         limit=limit,
         offset=offset,
     )
     return success(ProductSelectObjectListResponse(**data))
 
 
-@router.get("/objects/{object_id}/matches", summary="查询某个商品机会的同款/供应链匹配")
+@router.get("/objects/{object_id}/matches", summary="查询某个商品机会的商品匹配")
 def get_object_matches(
     object_id: int,
     source: str | None = Query(default=None, description="google_lens/amazon/taobao/1688 等"),
@@ -158,17 +157,16 @@ def get_object_matches(
     return success(ProductSelectMatchListResponse(**data))
 
 
-@router.post("/objects/{object_id}/supply-match", summary="对单个商品机会触发供应链匹配")
-def run_object_supply_match(
+@router.post("/objects/{object_id}/matches/refresh", summary="刷新某个商品机会的商品匹配")
+def refresh_object_matches(
     object_id: int,
-    payload: SupplyMatchRequest,
+    payload: ProductMatchRefreshRequest,
     db: Session = Depends(get_db),
 ):
     try:
-        data = api_service.run_object_supply_match(
+        data = api_service.refresh_object_matches(
             db,
             object_id=object_id,
-            force=payload.force,
             lens_type=payload.lens_type,
             limit=payload.limit,
         )
@@ -176,4 +174,4 @@ def run_object_supply_match(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if data is None:
         raise HTTPException(status_code=404, detail="object_not_found")
-    return success(SupplyMatchResponse(**data))
+    return success(ProductMatchResponse(**data))
