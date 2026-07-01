@@ -36,7 +36,7 @@ _PROMPT = """你是电商选品视觉分析师，专长是发现「与名人或�
 
 严格输出 JSON（不要 markdown 代码块、不要多余解释），结构：
 {
-  "objects": [
+  "objects": [ 
     {
       "category": "品类，如 耳环/卫衣/手办",
       "related_ip": "关联的名人或 IP 名称；无法确认填 未知",

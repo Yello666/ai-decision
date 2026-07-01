@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.schemas.product_select import (
     InstagramRunRequest,
     MonitorCreateRequest,
+    MonitorRunRequest,
     MonitorUpdateRequest,
     ProductMatchTestRequest,
 )
@@ -259,6 +260,19 @@ def query_monitors(
     }
 
 
+def _find_instagram_profile_monitor(db: Session, handle: str):
+    normalized = handle.strip().lstrip("@")
+    rows = list_monitors(db, platform="instagram", is_enabled=None, limit=500)
+    return next(
+        (
+            row
+            for row in rows
+            if row.handle == normalized and row.monitor_type == "profile"
+        ),
+        None,
+    )
+
+
 def run_instagram_monitor(payload: InstagramRunRequest, db: Session) -> dict[str, Any]:
     profiles = payload.profiles or config.INSTAGRAM_PROFILES
     fetched_posts = 0
@@ -268,14 +282,16 @@ def run_instagram_monitor(payload: InstagramRunRequest, db: Session) -> dict[str
     object_total = 0
 
     for profile in profiles:
-        monitor = upsert_monitor(
-            db,
-            platform="instagram",
-            handle=profile.strip().lstrip("@"),
-            display_name=config.display_name(profile),
-            monitor_type="profile",
-            score=5,
-        )
+        monitor = _find_instagram_profile_monitor(db, profile)
+        if monitor is None:
+            monitor = upsert_monitor(
+                db,
+                platform="instagram",
+                handle=profile.strip().lstrip("@"),
+                display_name=config.display_name(profile),
+                monitor_type="profile",
+                score=5,
+            )
         try:
             posts = fetch_latest_posts(profile, payload.posts_per_profile)
         except Exception:
@@ -387,6 +403,44 @@ def run_instagram_monitor(payload: InstagramRunRequest, db: Session) -> dict[str
         "object_total": object_total,
         "output_dir": str(config.INSTAGRAM_OUTPUT_DIR),
     }
+
+
+def run_monitors(payload: MonitorRunRequest, db: Session) -> dict[str, Any]:
+    supported_profiles: list[str] = []
+    unsupported_monitors: list[dict[str, Any]] = []
+
+    for monitor_id in payload.monitor_ids:
+        monitor = get_monitor(db, monitor_id)
+        if monitor is None or not monitor.is_enabled:
+            continue
+        if monitor.platform == "instagram" and monitor.monitor_type == "profile":
+            supported_profiles.append(monitor.handle)
+        else:
+            unsupported_monitors.append(monitor_to_dict(monitor))
+
+    if supported_profiles:
+        result = run_instagram_monitor(
+            InstagramRunRequest(
+                profiles=supported_profiles,
+                posts_per_profile=payload.posts_per_profile,
+                max_images_per_post=payload.max_images_per_post,
+                force=payload.force,
+            ),
+            db,
+        )
+    else:
+        result = {
+            "profiles": [],
+            "fetched_posts": 0,
+            "processed_posts": 0,
+            "skipped_posts": 0,
+            "failed_posts": 0,
+            "object_total": 0,
+            "output_dir": str(config.INSTAGRAM_OUTPUT_DIR),
+        }
+
+    result["unsupported_monitors"] = unsupported_monitors
+    return result
 
 
 def run_aggregate_to_files() -> dict[str, Any]:

@@ -64,6 +64,19 @@ class MonitorListResponse(BaseModel):
     returned_count: int
 
 
+class MonitorRunRequest(BaseModel):
+    """按监控池对象运行监控任务。"""
+
+    monitor_ids: list[int] = Field(..., min_length=1, description="本次要运行的监控对象 ID")
+    posts_per_profile: int = Field(default=3, ge=1, le=20, description="每个账号抓取最新帖子数")
+    max_images_per_post: int = Field(default=4, ge=1, le=10, description="每条帖子最多处理图片数")
+    force: bool = Field(default=False, description="true 时即使 recognition.json 已存在也重新处理")
+
+
+class MonitorRunResponse(InstagramRunResponse):
+    unsupported_monitors: list[MonitorOut] = Field(default_factory=list)
+
+
 class AggregateRunResponse(BaseModel):
     summary_json: str
     summary_csv: str

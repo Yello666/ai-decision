@@ -10,6 +10,8 @@ from app.schemas.product_select import (
     MonitorCreateRequest,
     MonitorListResponse,
     MonitorOut,
+    MonitorRunRequest,
+    MonitorRunResponse,
     MonitorUpdateRequest,
     ProductSelectMatchListResponse,
     ProductSelectObjectListResponse,
@@ -69,6 +71,14 @@ def disable_monitor(
     if data is None:
         raise HTTPException(status_code=404, detail="monitor_not_found")
     return success(MonitorOut(**data))
+
+
+@router.post("/monitors/run", summary="运行监控池中的监控对象")
+def run_monitors(
+    payload: MonitorRunRequest,
+    db: Session = Depends(get_db),
+):
+    return success(MonitorRunResponse(**api_service.run_monitors(payload, db)))
 
 
 @router.post("/instagram/run", summary="运行 Instagram 名人监控")
