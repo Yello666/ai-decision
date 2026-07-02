@@ -74,6 +74,51 @@ def _image_size(path: Path) -> tuple[int | None, int | None]:
         return None, None
 
 
+def _normalized_bbox(value: Any) -> list[float] | None:
+    if not isinstance(value, list) or len(value) != 4:
+        return None
+    try:
+        x1, y1, x2, y2 = [float(v) for v in value]
+    except (TypeError, ValueError):
+        return None
+    x1, x2 = sorted((max(0.0, min(1.0, x1)), max(0.0, min(1.0, x2))))
+    y1, y2 = sorted((max(0.0, min(1.0, y1)), max(0.0, min(1.0, y2))))
+    if x2 - x1 <= 0.01 or y2 - y1 <= 0.01:
+        return None
+    return [x1, y1, x2, y2]
+
+
+def _attach_crop_image(
+    db: Session,
+    *,
+    obj,
+    source_image,
+    bbox: list[float] | None,
+) -> None:
+    if not bbox or source_image is None or not source_image.local_path:
+        return
+    source_path = Path(source_image.local_path)
+    if not source_path.exists():
+        return
+    crop_path = config.CROP_OUTPUT_DIR / f"object_{obj.id}" / "crop.jpg"
+    saved = crop_by_norm_box(source_path, bbox, crop_path)
+    if not saved:
+        return
+    oss_url = upload_and_sign(saved)
+    width, height = _image_size(saved)
+    crop_row = create_image(
+        db,
+        content_id=obj.content_id,
+        image_type="crop",
+        local_path=str(saved),
+        oss_url=oss_url,
+        width=width,
+        height=height,
+    )
+    obj.crop_image_id = crop_row.id
+    db.commit()
+
+
 def _download_instagram_images(
     post: InstagramPost,
     out_dir: Path,
@@ -363,7 +408,8 @@ def run_instagram_monitor(payload: InstagramRunRequest, db: Session) -> dict[str
                     continue
                 source_names = obj.get("source_images") if isinstance(obj.get("source_images"), list) else []
                 source_image = image_rows.get(source_names[0]) if source_names else None
-                create_object(
+                bbox = _normalized_bbox(obj.get("bbox"))
+                object_row = create_object(
                     db,
                     content_id=content.id,
                     source_image_id=source_image.id if source_image else None,
@@ -373,8 +419,10 @@ def run_instagram_monitor(payload: InstagramRunRequest, db: Session) -> dict[str
                     attributes=obj.get("attributes") if isinstance(obj.get("attributes"), list) else None,
                     ecommerce_potential=obj.get("ecommerce_potential") or "medium",
                     reason=obj.get("reason"),
+                    bbox=bbox,
                     token_usage=result.get("token_usage") if isinstance(result.get("token_usage"), dict) else None,
                 )
+                _attach_crop_image(db, obj=object_row, source_image=source_image, bbox=bbox)
 
             content.raw_path = str(recognition_path)
             content.status = "recognized"
