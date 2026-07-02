@@ -20,7 +20,6 @@ from app.schemas.product_select import (
     MonitorCreateRequest,
     MonitorRunRequest,
     MonitorUpdateRequest,
-    ProductMatchTestRequest,
 )
 from app.services.productselect_service import config
 from app.services.productselect_service.image_recognition import recognize_images
@@ -49,19 +48,9 @@ from app.services.productselect_service.repository import (
     upsert_content,
     upsert_monitor,
 )
-from app.services.productselect_service.run_aggregate import (
-    _write_outputs,
-    aggregate,
-)
-from app.services.productselect_service.run_supply_test import process_image
 from app.services.productselect_service.serpapi_lens import search_by_image_url
 
 logger = logging.getLogger(__name__)
-
-
-def resolve_path(path: str) -> Path:
-    p = Path(path)
-    return p if p.is_absolute() else config.PROJECT_ROOT / p
 
 
 def _safe_name(value: str) -> str:
@@ -441,148 +430,6 @@ def run_monitors(payload: MonitorRunRequest, db: Session) -> dict[str, Any]:
 
     result["unsupported_monitors"] = unsupported_monitors
     return result
-
-
-def run_aggregate_to_files() -> dict[str, Any]:
-    result = aggregate()
-    if not result.get("rows") and not result.get("stats"):
-        return {
-            "summary_json": "",
-            "summary_csv": "",
-            "stats": {},
-            "empty": True,
-        }
-
-    json_path, csv_path = _write_outputs(result)
-    return {
-        "summary_json": str(json_path),
-        "summary_csv": str(csv_path),
-        "stats": result.get("stats") or {},
-        "empty": False,
-    }
-
-
-def read_summary(
-    *,
-    platform: str | None = None,
-    account: str | None = None,
-    potential: str | None = None,
-    limit: int = 200,
-) -> dict[str, Any]:
-    summary_path = config.PRODUCT_SELECT_DIR / "summary.json"
-    if not summary_path.exists():
-        raise FileNotFoundError("summary.json 不存在，请先调用 /product-select/aggregate/run")
-
-    raw = json.loads(summary_path.read_text(encoding="utf-8"))
-    rows: list[dict[str, Any]] = raw.get("rows") or []
-    if platform:
-        rows = [r for r in rows if r.get("platform") == platform]
-    if account:
-        rows = [r for r in rows if r.get("account") == account]
-    if potential:
-        p = potential.strip().lower()
-        rows = [r for r in rows if r.get("ecommerce_potential") == p]
-
-    return {
-        "stats": raw.get("stats") or {},
-        "rows": rows[:limit],
-        "returned_count": min(len(rows), limit),
-    }
-
-
-def _slim_supply_result(result: dict[str, Any]) -> dict[str, Any]:
-    """接口返回精简版：保留所有物件，但每个物件仅返回 top_matches，不直接返回完整 lens。"""
-    slim = dict(result)
-    items: list[dict[str, Any]] = []
-    for item in result.get("items") or []:
-        if not isinstance(item, dict):
-            continue
-        compact = {k: v for k, v in item.items() if k != "lens"}
-        if not compact.get("top_matches") and isinstance(item.get("lens"), dict):
-            compact["top_matches"] = build_top_matches(
-                item["lens"],
-                category=item.get("category"),
-                related_ip=item.get("related_ip"),
-                limit=3,
-            )
-        else:
-            compact["top_matches"] = compact.get("top_matches") or []
-        items.append(compact)
-    slim["items"] = items
-    return slim
-
-
-def run_supply_test(payload: ProductMatchTestRequest) -> dict[str, Any]:
-    config.SUPPLY_TEST_DIR.mkdir(parents=True, exist_ok=True)
-    results: list[dict[str, Any]] = []
-    failed_images = 0
-
-    potential_filter = payload.potential_filter or []
-    for raw_path in payload.images:
-        image_path = resolve_path(raw_path)
-        if not image_path.exists():
-            failed_images += 1
-            results.append({"source_image": str(image_path), "error": "image_not_found"})
-            continue
-
-        try:
-            result = process_image(
-                image_path,
-                potential_filter=potential_filter,
-                lens_type=payload.lens_type,
-            )
-        except Exception as exc:
-            logger.exception("供应链测试失败 image=%s", image_path)
-            failed_images += 1
-            results.append({"source_image": str(image_path), "error": str(exc)})
-            continue
-
-        out_path = config.SUPPLY_TEST_DIR / f"{image_path.stem}.json"
-        out_path.write_text(
-            json.dumps(result, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        result_path = str(out_path)
-
-        slim_result = _slim_supply_result(result)
-        slim_result["result_path"] = result_path
-        results.append(slim_result)
-
-    return {
-        "processed_images": len(payload.images) - failed_images,
-        "failed_images": failed_images,
-        "results": results,
-        "output_dir": str(config.SUPPLY_TEST_DIR),
-    }
-
-
-def read_supply_result(image_stem: str) -> dict[str, Any]:
-    result_path = config.SUPPLY_TEST_DIR / f"{image_stem}.json"
-    if not result_path.exists():
-        raise FileNotFoundError("供应链测试结果不存在")
-    result = json.loads(result_path.read_text(encoding="utf-8"))
-    slim = _slim_supply_result(result)
-    slim["result_path"] = str(result_path)
-    return slim
-
-
-def get_object_matches(
-    db: Session,
-    *,
-    object_id: int,
-    limit: int,
-) -> dict[str, Any] | None:
-    """查看单个商品机会已有商品匹配，只读数据库，不调用外部服务。"""
-    obj = get_object(db, object_id)
-    if obj is None:
-        return None
-    cached = list_matches(db, object_id=object_id, source="google_lens", limit=limit)
-    return {
-        "object": object_detail_to_dict(db, obj),
-        "top_matches": [match_to_dict(row) for row in cached],
-        "matched_count": len(cached),
-        "from_cache": True,
-    }
 
 
 def refresh_object_matches(

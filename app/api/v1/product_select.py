@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session
 from app.core.responses import success
 from app.db.mysql import get_db
 from app.schemas.product_select import (
-    AggregateRunResponse,
     InstagramRunRequest,
     InstagramRunResponse,
     MonitorCreateRequest,
@@ -17,9 +16,6 @@ from app.schemas.product_select import (
     ProductSelectObjectListResponse,
     ProductMatchRefreshRequest,
     ProductMatchResponse,
-    ProductMatchTestRequest,
-    ProductMatchTestResponse,
-    SummaryResponse,
 )
 from app.services.productselect_service import api_service
 
@@ -87,51 +83,6 @@ def run_instagram_monitor(
     db: Session = Depends(get_db),
 ):
     return success(InstagramRunResponse(**api_service.run_instagram_monitor(payload, db)))
-
-
-@router.post("/aggregate/run", summary="聚合 recognition.json 为 summary.json/csv")
-def run_aggregate():
-    result = api_service.run_aggregate_to_files()
-    data = AggregateRunResponse(
-        summary_json=result["summary_json"],
-        summary_csv=result["summary_csv"],
-        stats=result["stats"],
-    )
-    message = "no productSelect data found" if result.get("empty") else "success"
-    return success(data, message=message)
-
-
-@router.get("/summary", summary="读取聚合后的选品总表")
-def get_summary(
-    platform: str | None = Query(default=None, description="按平台过滤，如 instagram/youtube"),
-    account: str | None = Query(default=None, description="按账号/频道过滤"),
-    potential: str | None = Query(default=None, description="按潜力过滤，如 high/medium/low"),
-    limit: int = Query(default=200, ge=1, le=2000, description="最多返回条数"),
-):
-    try:
-        data = api_service.read_summary(
-            platform=platform,
-            account=account,
-            potential=potential,
-            limit=limit,
-        )
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="summary.json 不存在，请先调用 /product-select/aggregate/run")
-    return success(SummaryResponse(**data))
-
-
-@router.post("/matches/test", summary="商品匹配测试：bbox 裁剪 + OSS + Google Lens")
-def run_match_test(payload: ProductMatchTestRequest):
-    return success(ProductMatchTestResponse(**api_service.run_supply_test(payload)))
-
-
-@router.get("/matches/test/result/{image_stem}", summary="读取某张图的商品匹配测试结果")
-def get_match_test_result(image_stem: str):
-    try:
-        data = api_service.read_supply_result(image_stem)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="商品匹配测试结果不存在")
-    return success(data)
 
 
 @router.get("/objects", summary="从数据库查询识图商品机会")

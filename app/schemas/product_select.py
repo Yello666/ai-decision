@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field
 
 
 LensType = Literal["all", "products", "visual_matches", "exact_matches"]
-PotentialLevel = Literal["high", "medium", "low"]
 
 
 class InstagramRunRequest(BaseModel):
@@ -75,36 +74,6 @@ class MonitorRunRequest(BaseModel):
 
 class MonitorRunResponse(InstagramRunResponse):
     unsupported_monitors: list[MonitorOut] = Field(default_factory=list)
-
-
-class AggregateRunResponse(BaseModel):
-    summary_json: str
-    summary_csv: str
-    stats: dict[str, Any]
-
-
-class SummaryResponse(BaseModel):
-    stats: dict[str, Any]
-    rows: list[dict[str, Any]]
-    returned_count: int
-
-
-class ProductMatchTestRequest(BaseModel):
-    """对指定图片测试「bbox → 裁剪 → OSS → SerpApi Google Lens」。"""
-
-    images: list[str] = Field(..., min_length=1, description="本地图片路径；支持绝对路径或项目根相对路径")
-    potential_filter: list[PotentialLevel] | None = Field(
-        default=["high"],
-        description="只对这些潜力等级调用 Lens；null/空数组表示全部查",
-    )
-    lens_type: LensType = Field(default="products", description="Google Lens type 参数")
-
-
-class ProductMatchTestResponse(BaseModel):
-    processed_images: int
-    failed_images: int
-    results: list[dict[str, Any]]
-    output_dir: str
 
 
 class ProductMatchRefreshRequest(BaseModel):
