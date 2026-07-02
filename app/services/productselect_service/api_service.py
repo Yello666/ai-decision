@@ -31,10 +31,10 @@ from app.services.productselect_service.image_crop import crop_by_norm_box
 from app.services.productselect_service.lens_filter import build_top_matches
 from app.services.productselect_service.oss_uploader import upload_and_sign
 from app.services.productselect_service.repository import (
-    clear_content_artifacts,
     create_image,
     create_matches_from_lens,
     create_object,
+    deactivate_objects_for_content,
     delete_matches_for_object,
     disable_monitor,
     get_image,
@@ -44,6 +44,7 @@ from app.services.productselect_service.repository import (
     list_matches,
     list_monitors,
     list_objects,
+    next_object_version_for_content,
     update_monitor,
     upsert_content,
     upsert_monitor,
@@ -155,6 +156,8 @@ def object_to_dict(row) -> dict[str, Any]:
         "ecommerce_potential": row.ecommerce_potential,
         "reason": row.reason,
         "bbox": row.bbox_json,
+        "recognition_version": row.recognition_version,
+        "is_active": row.is_active,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
@@ -347,16 +350,6 @@ def run_instagram_monitor(payload: InstagramRunRequest, db: Session) -> dict[str
                 status="fetched",
             )
             post_dir = config.INSTAGRAM_OUTPUT_DIR / safe_user / post.post_id
-            recognition_path = post_dir / "recognition.json"
-            if recognition_path.exists() and not payload.force:
-                content.raw_path = str(recognition_path)
-                content.status = "recognized"
-                db.commit()
-                skipped_posts += 1
-                continue
-
-            if payload.force:
-                clear_content_artifacts(db, content.id)
 
             images = _download_instagram_images(
                 post,
@@ -393,6 +386,8 @@ def run_instagram_monitor(payload: InstagramRunRequest, db: Session) -> dict[str
                 failed_posts += 1
                 continue
 
+            recognition_version = next_object_version_for_content(db, content.id)
+            recognition_path = post_dir / f"recognition_v{recognition_version}.json"
             result["post_id"] = post.post_id
             result["username"] = post.username
             result["post_url"] = post.url
@@ -403,6 +398,7 @@ def run_instagram_monitor(payload: InstagramRunRequest, db: Session) -> dict[str
                 encoding="utf-8",
             )
 
+            deactivate_objects_for_content(db, content.id)
             for obj in result.get("objects") or []:
                 if not isinstance(obj, dict):
                     continue
@@ -420,6 +416,8 @@ def run_instagram_monitor(payload: InstagramRunRequest, db: Session) -> dict[str
                     ecommerce_potential=obj.get("ecommerce_potential") or "medium",
                     reason=obj.get("reason"),
                     bbox=bbox,
+                    recognition_version=recognition_version,
+                    is_active=True,
                     token_usage=result.get("token_usage") if isinstance(result.get("token_usage"), dict) else None,
                 )
                 _attach_crop_image(db, obj=object_row, source_image=source_image, bbox=bbox)
@@ -461,7 +459,6 @@ def run_monitors(payload: MonitorRunRequest, db: Session) -> dict[str, Any]:
                 profiles=supported_profiles,
                 posts_per_profile=payload.posts_per_profile,
                 max_images_per_post=payload.max_images_per_post,
-                force=payload.force,
             ),
             db,
         )
@@ -478,6 +475,17 @@ def run_monitors(payload: MonitorRunRequest, db: Session) -> dict[str, Any]:
 
     result["unsupported_monitors"] = unsupported_monitors
     return result
+
+
+def delete_object_by_id(db: Session, object_id: int) -> dict[str, Any] | None:
+    obj = get_object(db, object_id)
+    if obj is None:
+        return None
+    data = object_detail_to_dict(db, obj)
+    delete_matches_for_object(db, object_id, commit=False)
+    db.delete(obj)
+    db.commit()
+    return data
 
 
 def refresh_object_matches(
@@ -565,6 +573,7 @@ def query_objects(
     related_ip: str | None,
     category: str | None,
     include_test: bool,
+    active_only: bool,
     limit: int,
     offset: int,
 ) -> dict[str, Any]:
@@ -574,6 +583,7 @@ def query_objects(
         related_ip=related_ip,
         category=category,
         include_test=include_test,
+        active_only=active_only,
         limit=limit,
         offset=offset,
     )

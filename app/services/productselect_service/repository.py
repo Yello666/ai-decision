@@ -225,29 +225,6 @@ def get_content(
     return db.query(ProductSelectContent).filter(ProductSelectContent.id == content_id).first()
 
 
-def clear_content_artifacts(
-    db: Session,
-    content_id: int,
-    *,
-    commit: bool = True,
-) -> None:
-    """清理某条内容下旧的图片、识图物件与匹配结果。
-
-    用于 force=true 重新识图，避免重复商品机会。先删 objects（matches 外键级联删除），
-    再删 images。
-    """
-    db.query(ProductSelectObject).filter(ProductSelectObject.content_id == content_id).delete(
-        synchronize_session=False
-    )
-    db.query(ProductSelectImage).filter(ProductSelectImage.content_id == content_id).delete(
-        synchronize_session=False
-    )
-    if commit:
-        db.commit()
-    else:
-        db.flush()
-
-
 def create_image(
     db: Session,
     *,
@@ -288,6 +265,8 @@ def create_object(
     ecommerce_potential: str = "medium",
     reason: str | None = None,
     bbox: list[float] | None = None,
+    recognition_version: int = 1,
+    is_active: bool = True,
     token_usage: dict[str, Any] | None = None,
     commit: bool = True,
 ) -> ProductSelectObject:
@@ -302,10 +281,44 @@ def create_object(
         ecommerce_potential=(ecommerce_potential or "medium").strip().lower(),
         reason=reason,
         bbox_json=bbox,
+        recognition_version=recognition_version,
+        is_active=is_active,
         token_usage_json=token_usage,
     )
     db.add(row)
     return _commit_refresh(db, row, commit=commit)
+
+
+def next_object_version_for_content(db: Session, content_id: int) -> int:
+    max_version = (
+        db.query(ProductSelectObject.recognition_version)
+        .filter(ProductSelectObject.content_id == content_id)
+        .order_by(ProductSelectObject.recognition_version.desc())
+        .limit(1)
+        .scalar()
+    )
+    return int(max_version or 0) + 1
+
+
+def deactivate_objects_for_content(
+    db: Session,
+    content_id: int,
+    *,
+    commit: bool = True,
+) -> int:
+    count = (
+        db.query(ProductSelectObject)
+        .filter(
+            ProductSelectObject.content_id == content_id,
+            ProductSelectObject.is_active.is_(True),
+        )
+        .update({ProductSelectObject.is_active: False}, synchronize_session=False)
+    )
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+    return count
 
 
 def create_match(
@@ -422,12 +435,15 @@ def list_objects(
     related_ip: str | None = None,
     category: str | None = None,
     include_test: bool = False,
+    active_only: bool = True,
     limit: int = 100,
     offset: int = 0,
 ) -> list[ProductSelectObject]:
     q = db.query(ProductSelectObject)
     if not include_test:
         q = q.filter(ProductSelectObject.content_id.is_not(None))
+    if active_only:
+        q = q.filter(ProductSelectObject.is_active.is_(True))
     if potential:
         q = q.filter(ProductSelectObject.ecommerce_potential == potential.strip().lower())
     if related_ip:

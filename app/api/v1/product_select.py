@@ -91,6 +91,7 @@ def get_objects(
     related_ip: str | None = Query(default=None, description="关联名人/IP"),
     category: str | None = Query(default=None, description="品类"),
     include_test: bool = Query(default=False, description="是否包含商品匹配测试产生的测试对象"),
+    include_inactive: bool = Query(default=False, description="是否包含历史版本/已删除商品机会"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -101,10 +102,22 @@ def get_objects(
         related_ip=related_ip,
         category=category,
         include_test=include_test,
+        active_only=not include_inactive,
         limit=limit,
         offset=offset,
     )
     return success(ProductSelectObjectListResponse(**data))
+
+
+@router.delete("/objects/{object_id}", summary="删除某个商品机会")
+def delete_object(
+    object_id: int,
+    db: Session = Depends(get_db),
+):
+    data = api_service.delete_object_by_id(db, object_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="object_not_found")
+    return success(data)
 
 
 @router.get("/objects/{object_id}/matches", summary="查询某个商品机会的商品匹配")

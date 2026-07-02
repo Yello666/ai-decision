@@ -124,6 +124,8 @@ class ProductSelectObject(Base):
     ecommerce_potential = Column(String(16), nullable=False, default="medium", index=True)
     reason = Column(Text, nullable=True)
     bbox_json = Column(JSON, nullable=True)
+    recognition_version = Column(Integer, nullable=False, default=1)
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
     token_usage_json = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
