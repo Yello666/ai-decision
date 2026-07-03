@@ -29,7 +29,7 @@ from app.services.productselect_service.instagram_apify import (
 )
 from app.services.productselect_service.image_crop import crop_by_norm_box
 from app.services.productselect_service.lens_filter import build_top_matches
-from app.services.productselect_service.oss_uploader import upload_and_sign
+from app.services.productselect_service.oss_uploader import sign_key, upload_bytes, upload_file
 from app.services.productselect_service.repository import (
     create_image,
     create_matches_from_lens,
@@ -89,6 +89,96 @@ def _normalized_bbox(value: Any) -> list[float] | None:
     return [x1, y1, x2, y2]
 
 
+def _signed_url_from_image_row(row) -> str | None:
+    """按 oss_key 签发前端/API 可访问 URL；原图可回退 Instagram source_url。"""
+    if row is None:
+        return None
+    if row.oss_key:
+        try:
+            return sign_key(row.oss_key, config.OSS_API_SIGN_URL_EXPIRE)
+        except Exception:
+            logger.exception("OSS 签名失败 key=%s", row.oss_key)
+    if row.image_type == "source" and row.source_url:
+        return row.source_url
+    return None
+
+
+def _ensure_image_on_oss(
+    db: Session,
+    row,
+    *,
+    prefix: str,
+) -> str | None:
+    """确保图片在 OSS 上有 oss_key，返回可用于 Lens 的签名 URL。"""
+    if row is None:
+        return None
+    if row.oss_key:
+        try:
+            return sign_key(row.oss_key, config.OSS_SIGN_URL_EXPIRE)
+        except Exception:
+            logger.exception("OSS 签名失败 key=%s", row.oss_key)
+    local_path = Path(row.local_path) if row.local_path else None
+    if local_path is None or not local_path.exists():
+        return _signed_url_from_image_row(row)
+    try:
+        uploaded = upload_file(local_path, prefix=prefix, expire_seconds=config.OSS_SIGN_URL_EXPIRE)
+        row.oss_key = uploaded.key
+        row.oss_url = uploaded.url
+        db.commit()
+        return uploaded.url
+    except Exception:
+        logger.exception("图片上传 OSS 失败 path=%s", local_path)
+        if row.image_type == "source" and row.source_url:
+            return row.source_url
+        return None
+
+
+def _upload_source_image(
+    db: Session,
+    *,
+    content_id: int,
+    image_path: Path,
+    source_url: str,
+) -> Any:
+    width, height = _image_size(image_path)
+    oss_key: str | None = None
+    try:
+        uploaded = upload_file(image_path, prefix=config.OSS_SOURCE_PREFIX)
+        oss_key = uploaded.key
+    except Exception:
+        logger.exception("原图上传 OSS 失败 path=%s", image_path)
+    return create_image(
+        db,
+        content_id=content_id,
+        image_type="source",
+        local_path=str(image_path),
+        oss_key=oss_key,
+        source_url=source_url,
+        width=width,
+        height=height,
+    )
+
+
+def _upload_recognition_artifact(
+    *,
+    content_id: int,
+    recognition_version: int,
+    payload: dict[str, Any],
+) -> str | None:
+    """将识图 JSON 备份到 OSS，返回 oss_key。"""
+    try:
+        data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        uploaded = upload_bytes(
+            data,
+            suffix=f"_v{recognition_version}.json",
+            prefix=f"{config.OSS_RECOGNITION_PREFIX}{content_id}/",
+        )
+        return uploaded.key
+    except Exception:
+        logger.exception("识图 JSON 上传 OSS 失败 content_id=%s", content_id)
+        return None
+
+
 def _attach_crop_image(
     db: Session,
     *,
@@ -96,23 +186,28 @@ def _attach_crop_image(
     source_image,
     bbox: list[float] | None,
 ) -> None:
-    if not bbox or source_image is None or not source_image.local_path:
+    if not bbox or source_image is None:
         return
-    source_path = Path(source_image.local_path)
-    if not source_path.exists():
+    source_path = Path(source_image.local_path) if source_image.local_path else None
+    if source_path is None or not source_path.exists():
         return
     crop_path = config.CROP_OUTPUT_DIR / f"object_{obj.id}" / "crop.jpg"
     saved = crop_by_norm_box(source_path, bbox, crop_path)
     if not saved:
         return
-    oss_url = upload_and_sign(saved)
+    oss_key: str | None = None
+    try:
+        uploaded = upload_file(saved, prefix=config.OSS_CROP_PREFIX)
+        oss_key = uploaded.key
+    except Exception:
+        logger.exception("裁剪图上传 OSS 失败 object_id=%s", obj.id)
     width, height = _image_size(saved)
     crop_row = create_image(
         db,
         content_id=obj.content_id,
         image_type="crop",
         local_path=str(saved),
-        oss_url=oss_url,
+        oss_key=oss_key,
         width=width,
         height=height,
     )
@@ -190,7 +285,7 @@ def image_to_dict(row) -> dict[str, Any] | None:
         "image_type": row.image_type,
         "local_path": row.local_path,
         "oss_key": row.oss_key,
-        "oss_url": row.oss_url,
+        "oss_url": _signed_url_from_image_row(row),
         "source_url": row.source_url,
         "width": row.width,
         "height": row.height,
@@ -366,15 +461,11 @@ def run_instagram_monitor(payload: InstagramRunRequest, db: Session) -> dict[str
                 image_paths = [path for path, _ in images]
                 image_rows = {}
                 for image_path, source_url in images:
-                    width, height = _image_size(image_path)
-                    image_row = create_image(
+                    image_row = _upload_source_image(
                         db,
                         content_id=content.id,
-                        image_type="source",
-                        local_path=str(image_path),
+                        image_path=image_path,
                         source_url=source_url,
-                        width=width,
-                        height=height,
                     )
                     image_rows[image_path.name] = image_row
 
@@ -393,6 +484,13 @@ def run_instagram_monitor(payload: InstagramRunRequest, db: Session) -> dict[str
             result["post_url"] = post.url
             result["timestamp"] = post.timestamp
             result["caption"] = post.caption
+            recognition_oss_key = _upload_recognition_artifact(
+                content_id=content.id,
+                recognition_version=recognition_version,
+                payload=result,
+            )
+            if recognition_oss_key:
+                result["recognition_oss_key"] = recognition_oss_key
             recognition_path.write_text(
                 json.dumps(result, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -510,41 +608,42 @@ def refresh_object_matches(
     crop_image = get_image(db, obj.crop_image_id) if obj.crop_image_id else None
     source_image = get_image(db, obj.source_image_id) if obj.source_image_id else None
 
-    # 1) 已有裁剪图：优先重新签 OSS URL，避免旧签名过期
-    if crop_image and crop_image.local_path and Path(crop_image.local_path).exists():
-        image_url = upload_and_sign(Path(crop_image.local_path))
-    elif crop_image and crop_image.oss_url:
-        image_url = crop_image.oss_url
+    # 1) 优先用裁剪图（oss_key 可跨机器；本地仅作处理缓存）
+    if crop_image is not None:
+        image_url = _ensure_image_on_oss(db, crop_image, prefix=config.OSS_CROP_PREFIX)
 
     # 2) 无裁剪图但有 source + bbox：现场裁剪并上传
-    if image_url is None and source_image and source_image.local_path and Path(source_image.local_path).exists():
-        source_path = Path(source_image.local_path)
-        if isinstance(obj.bbox_json, list) and len(obj.bbox_json) == 4:
+    if image_url is None and source_image is not None:
+        source_path = Path(source_image.local_path) if source_image.local_path else None
+        if source_path and source_path.exists() and isinstance(obj.bbox_json, list) and len(obj.bbox_json) == 4:
             crop_path = config.CROP_OUTPUT_DIR / f"object_{obj.id}" / "crop.jpg"
             saved = crop_by_norm_box(source_path, obj.bbox_json, crop_path)
             if saved:
-                oss_url = upload_and_sign(saved)
+                oss_key: str | None = None
+                lens_url: str | None = None
+                try:
+                    uploaded = upload_file(saved, prefix=config.OSS_CROP_PREFIX)
+                    oss_key = uploaded.key
+                    lens_url = uploaded.url
+                except Exception:
+                    logger.exception("现场裁剪图上传 OSS 失败 object_id=%s", obj.id)
                 width, height = _image_size(saved)
                 crop_row = create_image(
                     db,
                     content_id=obj.content_id,
                     image_type="crop",
                     local_path=str(saved),
-                    oss_url=oss_url,
+                    oss_key=oss_key,
                     width=width,
                     height=height,
                 )
                 obj.crop_image_id = crop_row.id
                 db.commit()
-                image_url = oss_url
+                image_url = lens_url
 
         # 3) 仍无裁剪图时，用原图兜底
         if image_url is None:
-            image_url = upload_and_sign(source_path)
-
-    # 4) 最后兜底：已有远程图
-    if image_url is None and source_image:
-        image_url = source_image.oss_url or source_image.source_url
+            image_url = _ensure_image_on_oss(db, source_image, prefix=config.OSS_SOURCE_PREFIX)
 
     if not image_url:
         raise ValueError("object 缺少可用于商品匹配的图片")

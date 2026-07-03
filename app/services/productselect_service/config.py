@@ -45,7 +45,7 @@ FRAME_TIMEOUT_SECONDS = 120
 # 识图（DashScope 上的通义千问视觉模型）
 # ------------------------------
 # 视觉模型名称
-VL_MODEL = "qwen-vl-plus"
+VL_MODEL = "qwen3.7-plus"
 
 # DashScope OpenAI 兼容接口（与项目主配置 LLM_API_URL 一致）
 VL_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -172,8 +172,13 @@ CROP_PADDING_RATIO = 0.04
 OSS_ENDPOINT = "oss-ap-southeast-1.aliyuncs.com"
 OSS_BUCKET = "video-upload-shopai"
 OSS_REGION = "ap-southeast-1"
-OSS_UPLOAD_PREFIX = "productselect/crops/"
-OSS_SIGN_URL_EXPIRE = 3600  # 签名 URL 有效期（秒）；上传后立即调用 Lens，足够
+OSS_SOURCE_PREFIX = "productselect/sources/"
+OSS_CROP_PREFIX = "productselect/crops/"
+OSS_RECOGNITION_PREFIX = "productselect/recognition/"
+# 兼容旧代码引用
+OSS_UPLOAD_PREFIX = OSS_CROP_PREFIX
+OSS_SIGN_URL_EXPIRE = 3600  # Lens 等即时调用
+OSS_API_SIGN_URL_EXPIRE = 21600  # API 返回给前端的签名有效期（6 小时）
 
 # SerpApi Google Lens
 # type: all（最全，含 visual_matches + related_content）| products | visual_matches | exact_matches
