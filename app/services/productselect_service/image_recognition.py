@@ -44,6 +44,16 @@ _PROMPT = """你是电商选品视觉分析师，专长是发现「与名人或�
 7. 如果商品很小，也请尽量给出覆盖完整商品的大致框，不要为了精确而裁得过窄，如果你认为截出来效果不好，那就不要返回了。
 8. 不要把整张图都作为 bbox，除非该商品确实占据画面主体大部分区域。
 
+【商品预估参数 estimate】
+对每个识别出的物件，基于视觉尺寸、品类、材质与主流跨境电商（Amazon US）行情，给出预估参数。
+这是给后续选品决策用的估算值，不是实测；用户后续可人工修改。
+1. 价格默认币种 USD（currency 填 "USD"），给出区间：cost_price_min/max（采购/出厂成本）、selling_price_min/max（建议零售售价）。
+2. 尽量结合同类商品市场价位给出合理区间；至少给出 selling 或 cost 其中一组区间；无法估算则对应字段填 null。
+3. 尺寸重量均为可选：length_cm、width_cm、height_cm 为包装尺寸（厘米）；无法判断则填 null。
+4. volume_cm3 为体积（立方厘米），不规则件可单独填；若长宽高都有可由模型估算，否则填 null。
+5. weight_value 与 weight_unit 成对出现，weight_unit 仅允许 g、kg、lb、oz；无法判断重量则两者均 null。
+6. notes 用一两句话说明估算依据（如「同类耳环 Amazon 约 $15–25，1688 约 $2–5」）。
+
 严格输出 JSON（不要 markdown 代码块、不要多余解释），结构：
 {
   "objects": [ 
@@ -55,7 +65,21 @@ _PROMPT = """你是电商选品视觉分析师，专长是发现「与名人或�
       "description": "外观简述（颜色/材质/造型特征）",
       "attributes": ["关键特征标签", "..."],
       "ecommerce_potential": "high | medium | low",
-      "reason": "两三句话理由，尽量包含关联的名人/IP 名字，推荐原因，侵权风险评估"
+      "reason": "两三句话理由，尽量包含关联的名人/IP 名字，推荐原因，侵权风险评估",
+      "estimate": {
+        "cost_price_min": 2.5,
+        "cost_price_max": 6.0,
+        "selling_price_min": 15.0,
+        "selling_price_max": 28.0,
+        "currency": "USD",
+        "length_cm": null,
+        "width_cm": null,
+        "height_cm": null,
+        "volume_cm3": null,
+        "weight_value": null,
+        "weight_unit": null,
+        "notes": "估算依据简述"
+      }
     }
   ]
 }

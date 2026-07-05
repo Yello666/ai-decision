@@ -18,6 +18,7 @@ from app.models.product_select import (
     ProductSelectMatch,
     ProductSelectMonitor,
     ProductSelectObject,
+    ProductSelectObjectProfile,
 )
 
 
@@ -473,4 +474,170 @@ def list_matches(
         .limit(min(max(limit, 1), 500))
         .all()
     )
+
+
+def get_object_profile(
+    db: Session,
+    profile_id: int,
+) -> ProductSelectObjectProfile | None:
+    return db.query(ProductSelectObjectProfile).filter(ProductSelectObjectProfile.id == profile_id).first()
+
+
+def get_active_object_profile(
+    db: Session,
+    object_id: int,
+) -> ProductSelectObjectProfile | None:
+    return (
+        db.query(ProductSelectObjectProfile)
+        .filter(
+            ProductSelectObjectProfile.object_id == object_id,
+            ProductSelectObjectProfile.is_active.is_(True),
+        )
+        .order_by(ProductSelectObjectProfile.id.desc())
+        .first()
+    )
+
+
+def deactivate_profiles_for_object(
+    db: Session,
+    object_id: int,
+    *,
+    commit: bool = True,
+) -> int:
+    count = (
+        db.query(ProductSelectObjectProfile)
+        .filter(
+            ProductSelectObjectProfile.object_id == object_id,
+            ProductSelectObjectProfile.is_active.is_(True),
+        )
+        .update({ProductSelectObjectProfile.is_active: False}, synchronize_session=False)
+    )
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+    return count
+
+
+def create_object_profile(
+    db: Session,
+    *,
+    object_id: int,
+    cost_price_min: float | Decimal | None = None,
+    cost_price_max: float | Decimal | None = None,
+    selling_price_min: float | Decimal | None = None,
+    selling_price_max: float | Decimal | None = None,
+    currency: str | None = "USD",
+    length_cm: float | Decimal | None = None,
+    width_cm: float | Decimal | None = None,
+    height_cm: float | Decimal | None = None,
+    volume_cm3: float | Decimal | None = None,
+    weight_value: float | Decimal | None = None,
+    weight_unit: str | None = None,
+    source: str = "ai",
+    status: str = "draft",
+    reference_match_id: int | None = None,
+    notes: str | None = None,
+    is_active: bool = True,
+    deactivate_existing: bool = True,
+    commit: bool = True,
+) -> ProductSelectObjectProfile:
+    if deactivate_existing and is_active:
+        deactivate_profiles_for_object(db, object_id, commit=False)
+    row = ProductSelectObjectProfile(
+        object_id=object_id,
+        cost_price_min=_price_to_decimal(cost_price_min),
+        cost_price_max=_price_to_decimal(cost_price_max),
+        selling_price_min=_price_to_decimal(selling_price_min),
+        selling_price_max=_price_to_decimal(selling_price_max),
+        currency=(currency or "USD").strip().upper() or "USD",
+        length_cm=_price_to_decimal(length_cm),
+        width_cm=_price_to_decimal(width_cm),
+        height_cm=_price_to_decimal(height_cm),
+        volume_cm3=_price_to_decimal(volume_cm3),
+        weight_value=_price_to_decimal(weight_value),
+        weight_unit=(weight_unit or "").strip().lower() or None,
+        source=(source or "ai").strip().lower(),
+        status=(status or "draft").strip().lower(),
+        reference_match_id=reference_match_id,
+        notes=notes,
+        is_active=is_active,
+    )
+    db.add(row)
+    return _commit_refresh(db, row, commit=commit)
+
+
+def update_object_profile(
+    db: Session,
+    profile_id: int,
+    *,
+    cost_price_min: float | Decimal | None = None,
+    cost_price_max: float | Decimal | None = None,
+    selling_price_min: float | Decimal | None = None,
+    selling_price_max: float | Decimal | None = None,
+    currency: str | None = None,
+    length_cm: float | Decimal | None = None,
+    width_cm: float | Decimal | None = None,
+    height_cm: float | Decimal | None = None,
+    volume_cm3: float | Decimal | None = None,
+    weight_value: float | Decimal | None = None,
+    weight_unit: str | None = None,
+    source: str | None = None,
+    status: str | None = None,
+    reference_match_id: int | None = None,
+    notes: str | None = None,
+    is_active: bool | None = None,
+    commit: bool = True,
+) -> ProductSelectObjectProfile | None:
+    row = get_object_profile(db, profile_id)
+    if row is None:
+        return None
+
+    updates = {
+        "cost_price_min": cost_price_min,
+        "cost_price_max": cost_price_max,
+        "selling_price_min": selling_price_min,
+        "selling_price_max": selling_price_max,
+        "currency": currency,
+        "length_cm": length_cm,
+        "width_cm": width_cm,
+        "height_cm": height_cm,
+        "volume_cm3": volume_cm3,
+        "weight_value": weight_value,
+        "weight_unit": weight_unit,
+        "source": source,
+        "status": status,
+        "reference_match_id": reference_match_id,
+        "notes": notes,
+        "is_active": is_active,
+    }
+    for field, value in updates.items():
+        if value is None:
+            continue
+        if field in {
+            "cost_price_min",
+            "cost_price_max",
+            "selling_price_min",
+            "selling_price_max",
+            "length_cm",
+            "width_cm",
+            "height_cm",
+            "volume_cm3",
+            "weight_value",
+        }:
+            setattr(row, field, _price_to_decimal(value))
+        elif field == "currency":
+            row.currency = str(value).strip().upper() or row.currency
+        elif field in {"source", "status"}:
+            setattr(row, field, str(value).strip().lower())
+        elif field == "weight_unit":
+            row.weight_unit = str(value).strip().lower() or None
+        else:
+            setattr(row, field, value)
+
+    if is_active is True and row.object_id:
+        deactivate_profiles_for_object(db, row.object_id, commit=False)
+        row.is_active = True
+
+    return _commit_refresh(db, row, commit=commit)
 

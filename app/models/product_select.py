@@ -156,3 +156,40 @@ class ProductSelectMatch(Base):
     raw_json = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
+
+class ProductSelectObjectProfile(Base):
+    """Product Select 商品机会规划/预测（FBA 前置）。"""
+
+    __tablename__ = "product_select_object_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    object_id = Column(
+        Integer,
+        ForeignKey("product_select_objects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    cost_price_min = Column(DECIMAL(12, 2), nullable=True)
+    cost_price_max = Column(DECIMAL(12, 2), nullable=True)
+    selling_price_min = Column(DECIMAL(12, 2), nullable=True)
+    selling_price_max = Column(DECIMAL(12, 2), nullable=True)
+    currency = Column(String(16), nullable=True, default="USD")
+    length_cm = Column(DECIMAL(10, 2), nullable=True)
+    width_cm = Column(DECIMAL(10, 2), nullable=True)
+    height_cm = Column(DECIMAL(10, 2), nullable=True)
+    volume_cm3 = Column(DECIMAL(12, 2), nullable=True)
+    weight_value = Column(DECIMAL(10, 3), nullable=True)
+    weight_unit = Column(String(8), nullable=True)
+    source = Column(String(32), nullable=False, default="ai", index=True)
+    status = Column(String(32), nullable=False, default="draft", index=True)
+    reference_match_id = Column(
+        Integer,
+        ForeignKey("product_select_matches.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    notes = Column(Text, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+

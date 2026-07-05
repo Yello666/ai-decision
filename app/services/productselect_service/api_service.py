@@ -20,6 +20,8 @@ from app.schemas.product_select import (
     MonitorCreateRequest,
     MonitorRunRequest,
     MonitorUpdateRequest,
+    ObjectProfileCreateRequest,
+    ObjectProfileUpdateRequest,
 )
 from app.services.productselect_service import config
 from app.services.productselect_service.image_recognition import recognize_images
@@ -34,9 +36,11 @@ from app.services.productselect_service.repository import (
     create_image,
     create_matches_from_lens,
     create_object,
+    create_object_profile,
     deactivate_objects_for_content,
     delete_matches_for_object,
     disable_monitor,
+    get_active_object_profile,
     get_image,
     get_content,
     get_monitor,
@@ -46,6 +50,7 @@ from app.services.productselect_service.repository import (
     list_objects,
     next_object_version_for_content,
     update_monitor,
+    update_object_profile,
     upsert_content,
     upsert_monitor,
 )
@@ -215,6 +220,94 @@ def _attach_crop_image(
     db.commit()
 
 
+_VALID_WEIGHT_UNITS = frozenset({"g", "kg", "lb", "oz"})
+
+
+def _estimate_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _recognition_estimate_to_profile_kwargs(obj: dict[str, Any]) -> dict[str, Any] | None:
+    """从识图 JSON 的 estimate 字段解析商品预估参数。"""
+    raw = obj.get("estimate")
+    if not isinstance(raw, dict):
+        return None
+
+    weight_unit = raw.get("weight_unit")
+    if weight_unit is not None:
+        weight_unit = str(weight_unit).strip().lower()
+        if weight_unit not in _VALID_WEIGHT_UNITS:
+            weight_unit = None
+
+    weight_value = _estimate_float(raw.get("weight_value"))
+    if weight_value is None:
+        weight_unit = None
+
+    currency = raw.get("currency")
+    currency = str(currency).strip().upper() if currency else "USD"
+
+    notes = raw.get("notes")
+    notes = str(notes).strip() if notes else None
+
+    kwargs = {
+        "cost_price_min": _estimate_float(raw.get("cost_price_min")),
+        "cost_price_max": _estimate_float(raw.get("cost_price_max")),
+        "selling_price_min": _estimate_float(raw.get("selling_price_min")),
+        "selling_price_max": _estimate_float(raw.get("selling_price_max")),
+        "currency": currency or "USD",
+        "length_cm": _estimate_float(raw.get("length_cm")),
+        "width_cm": _estimate_float(raw.get("width_cm")),
+        "height_cm": _estimate_float(raw.get("height_cm")),
+        "volume_cm3": _estimate_float(raw.get("volume_cm3")),
+        "weight_value": weight_value,
+        "weight_unit": weight_unit,
+        "source": "ai",
+        "status": "draft",
+        "notes": notes,
+    }
+
+    has_data = any(
+        kwargs[key] is not None
+        for key in (
+            "cost_price_min",
+            "cost_price_max",
+            "selling_price_min",
+            "selling_price_max",
+            "length_cm",
+            "width_cm",
+            "height_cm",
+            "volume_cm3",
+            "weight_value",
+            "notes",
+        )
+    )
+    return kwargs if has_data else None
+
+
+def _attach_profile_from_recognition(
+    db: Session,
+    *,
+    object_row,
+    obj: dict[str, Any],
+) -> None:
+    """将识图结果中的 estimate 写入 product_select_object_profiles。"""
+    profile_kwargs = _recognition_estimate_to_profile_kwargs(obj)
+    if profile_kwargs is None:
+        return
+    create_object_profile(
+        db,
+        object_id=object_row.id,
+        deactivate_existing=True,
+        **profile_kwargs,
+    )
+
+
 def _download_instagram_images(
     post: InstagramPost,
     out_dir: Path,
@@ -236,6 +329,40 @@ def _download_instagram_images(
             except Exception:
                 logger.exception("Instagram 图片下载失败 post=%s url=%s", post.post_id, url)
     return saved
+
+
+def _decimal_to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def profile_to_dict(row) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "object_id": row.object_id,
+        "cost_price_min": _decimal_to_float(row.cost_price_min),
+        "cost_price_max": _decimal_to_float(row.cost_price_max),
+        "selling_price_min": _decimal_to_float(row.selling_price_min),
+        "selling_price_max": _decimal_to_float(row.selling_price_max),
+        "currency": row.currency,
+        "length_cm": _decimal_to_float(row.length_cm),
+        "width_cm": _decimal_to_float(row.width_cm),
+        "height_cm": _decimal_to_float(row.height_cm),
+        "volume_cm3": _decimal_to_float(row.volume_cm3),
+        "weight_value": _decimal_to_float(row.weight_value),
+        "weight_unit": row.weight_unit,
+        "source": row.source,
+        "status": row.status,
+        "reference_match_id": row.reference_match_id,
+        "notes": row.notes,
+        "is_active": row.is_active,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
 
 
 def object_to_dict(row) -> dict[str, Any]:
@@ -337,6 +464,8 @@ def object_detail_to_dict(db: Session, row) -> dict[str, Any]:
     item["source_image"] = image_to_dict(source_image)
     item["crop_image"] = image_to_dict(crop_image)
     item["is_test"] = row.content_id is None
+    active_profile = get_active_object_profile(db, row.id)
+    item["profile"] = profile_to_dict(active_profile) if active_profile else None
     return item
 
 
@@ -519,6 +648,7 @@ def run_instagram_monitor(payload: InstagramRunRequest, db: Session) -> dict[str
                     token_usage=result.get("token_usage") if isinstance(result.get("token_usage"), dict) else None,
                 )
                 _attach_crop_image(db, obj=object_row, source_image=source_image, bbox=bbox)
+                _attach_profile_from_recognition(db, object_row=object_row, obj=obj)
 
             content.raw_path = str(recognition_path)
             content.status = "recognized"
@@ -707,4 +837,77 @@ def query_matches(
         "items": [match_to_dict(row) for row in rows],
         "returned_count": len(rows),
     }
+
+
+def _validate_profile_reference(db: Session, object_id: int, reference_match_id: int | None) -> None:
+    if reference_match_id is None:
+        return
+    from app.models.product_select import ProductSelectMatch
+
+    match_row = db.query(ProductSelectMatch).filter(
+        ProductSelectMatch.id == reference_match_id,
+        ProductSelectMatch.object_id == object_id,
+    ).first()
+    if match_row is None:
+        raise ValueError("reference_match_id 不存在或不属于该商品机会")
+
+
+def get_object_profile_by_object_id(db: Session, object_id: int) -> dict[str, Any] | None:
+    if get_object(db, object_id) is None:
+        return None
+    row = get_active_object_profile(db, object_id)
+    return profile_to_dict(row) if row else None
+
+
+def object_exists(db: Session, object_id: int) -> bool:
+    return get_object(db, object_id) is not None
+
+
+def upsert_object_profile(
+    db: Session,
+    object_id: int,
+    payload: ObjectProfileCreateRequest,
+) -> dict[str, Any] | None:
+    if get_object(db, object_id) is None:
+        return None
+    _validate_profile_reference(db, object_id, payload.reference_match_id)
+    row = create_object_profile(
+        db,
+        object_id=object_id,
+        cost_price_min=payload.cost_price_min,
+        cost_price_max=payload.cost_price_max,
+        selling_price_min=payload.selling_price_min,
+        selling_price_max=payload.selling_price_max,
+        currency=payload.currency,
+        length_cm=payload.length_cm,
+        width_cm=payload.width_cm,
+        height_cm=payload.height_cm,
+        volume_cm3=payload.volume_cm3,
+        weight_value=payload.weight_value,
+        weight_unit=payload.weight_unit,
+        source=payload.source,
+        status=payload.status,
+        reference_match_id=payload.reference_match_id,
+        notes=payload.notes,
+        is_active=True,
+        deactivate_existing=True,
+    )
+    return profile_to_dict(row)
+
+
+def patch_object_profile(
+    db: Session,
+    object_id: int,
+    payload: ObjectProfileUpdateRequest,
+) -> dict[str, Any] | None:
+    if get_object(db, object_id) is None:
+        return None
+    row = get_active_object_profile(db, object_id)
+    if row is None:
+        return None
+    if payload.reference_match_id is not None:
+        _validate_profile_reference(db, object_id, payload.reference_match_id)
+    updates = payload.model_dump(exclude_unset=True)
+    updated = update_object_profile(db, row.id, **updates)
+    return profile_to_dict(updated) if updated else None
 

@@ -12,6 +12,9 @@ from app.schemas.product_select import (
     MonitorRunRequest,
     MonitorRunResponse,
     MonitorUpdateRequest,
+    ObjectProfileCreateRequest,
+    ObjectProfileOut,
+    ObjectProfileUpdateRequest,
     ProductSelectMatchListResponse,
     ProductSelectObjectListResponse,
     ProductMatchRefreshRequest,
@@ -149,3 +152,46 @@ def refresh_object_matches(
     if data is None:
         raise HTTPException(status_code=404, detail="object_not_found")
     return success(ProductMatchResponse(**data))
+
+
+@router.get("/objects/{object_id}/profile", summary="查询商品机会当前规划/预测")
+def get_object_profile(
+    object_id: int,
+    db: Session = Depends(get_db),
+):
+    if not api_service.object_exists(db, object_id):
+        raise HTTPException(status_code=404, detail="object_not_found")
+    data = api_service.get_object_profile_by_object_id(db, object_id)
+    return success(data)
+
+
+@router.put("/objects/{object_id}/profile", summary="创建或覆盖商品机会当前规划/预测")
+def upsert_object_profile(
+    object_id: int,
+    payload: ObjectProfileCreateRequest,
+    db: Session = Depends(get_db),
+):
+    try:
+        data = api_service.upsert_object_profile(db, object_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if data is None:
+        raise HTTPException(status_code=404, detail="object_not_found")
+    return success(ObjectProfileOut(**data))
+
+
+@router.patch("/objects/{object_id}/profile", summary="部分更新商品机会当前规划/预测")
+def patch_object_profile(
+    object_id: int,
+    payload: ObjectProfileUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    try:
+        data = api_service.patch_object_profile(db, object_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not api_service.object_exists(db, object_id):
+        raise HTTPException(status_code=404, detail="object_not_found")
+    if data is None:
+        raise HTTPException(status_code=404, detail="profile_not_found")
+    return success(ObjectProfileOut(**data))

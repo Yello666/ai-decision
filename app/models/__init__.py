@@ -25,6 +25,7 @@ from .product_select import (
     ProductSelectMatch,
     ProductSelectMonitor,
     ProductSelectObject,
+    ProductSelectObjectProfile,
 )
 
 __all__ = [
@@ -50,4 +51,5 @@ __all__ = [
     "ProductSelectImage",
     "ProductSelectObject",
     "ProductSelectMatch",
+    "ProductSelectObjectProfile",
 ]

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 LensType = Literal["all", "products", "visual_matches", "exact_matches"]
+ProfileSource = Literal["ai", "match", "manual"]
+ProfileStatus = Literal["draft", "confirmed"]
+WeightUnit = Literal["g", "kg", "lb", "oz"]
 
 
 class InstagramRunRequest(BaseModel):
@@ -96,4 +99,86 @@ class ProductSelectObjectListResponse(BaseModel):
 class ProductSelectMatchListResponse(BaseModel):
     items: list[dict[str, Any]]
     returned_count: int
+
+
+def _validate_price_range(min_value: float | None, max_value: float | None, label: str) -> None:
+    if min_value is not None and max_value is not None and min_value > max_value:
+        raise ValueError(f"{label} 下限不能大于上限")
+
+
+class ObjectProfileBase(BaseModel):
+    cost_price_min: float | None = Field(default=None, ge=0, description="预测采购成本下限")
+    cost_price_max: float | None = Field(default=None, ge=0, description="预测采购成本上限")
+    selling_price_min: float | None = Field(default=None, ge=0, description="预测售价下限")
+    selling_price_max: float | None = Field(default=None, ge=0, description="预测售价上限")
+    currency: str | None = Field(default="USD", max_length=16, description="价格币种")
+    length_cm: float | None = Field(default=None, ge=0, description="长（cm）")
+    width_cm: float | None = Field(default=None, ge=0, description="宽（cm）")
+    height_cm: float | None = Field(default=None, ge=0, description="高（cm）")
+    volume_cm3: float | None = Field(default=None, ge=0, description="体积（cm³）")
+    weight_value: float | None = Field(default=None, ge=0, description="重量数值")
+    weight_unit: WeightUnit | None = Field(default=None, description="重量单位")
+    source: ProfileSource = Field(default="ai", description="预测来源")
+    status: ProfileStatus = Field(default="draft", description="draft|confirmed")
+    reference_match_id: int | None = Field(default=None, description="参考相似商品 id")
+    notes: str | None = Field(default=None, description="预测依据/备注")
+
+    @model_validator(mode="after")
+    def _validate_ranges(self) -> "ObjectProfileBase":
+        _validate_price_range(self.cost_price_min, self.cost_price_max, "采购成本")
+        _validate_price_range(self.selling_price_min, self.selling_price_max, "售价")
+        if self.weight_value is not None and self.weight_unit is None:
+            raise ValueError("填写重量时必须指定 weight_unit")
+        return self
+
+
+class ObjectProfileCreateRequest(ObjectProfileBase):
+    """创建或覆盖商品机会当前规划。"""
+
+
+class ObjectProfileUpdateRequest(BaseModel):
+    cost_price_min: float | None = Field(default=None, ge=0)
+    cost_price_max: float | None = Field(default=None, ge=0)
+    selling_price_min: float | None = Field(default=None, ge=0)
+    selling_price_max: float | None = Field(default=None, ge=0)
+    currency: str | None = Field(default=None, max_length=16)
+    length_cm: float | None = Field(default=None, ge=0)
+    width_cm: float | None = Field(default=None, ge=0)
+    height_cm: float | None = Field(default=None, ge=0)
+    volume_cm3: float | None = Field(default=None, ge=0)
+    weight_value: float | None = Field(default=None, ge=0)
+    weight_unit: WeightUnit | None = None
+    source: ProfileSource | None = None
+    status: ProfileStatus | None = None
+    reference_match_id: int | None = None
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_ranges(self) -> "ObjectProfileUpdateRequest":
+        _validate_price_range(self.cost_price_min, self.cost_price_max, "采购成本")
+        _validate_price_range(self.selling_price_min, self.selling_price_max, "售价")
+        return self
+
+
+class ObjectProfileOut(BaseModel):
+    id: int
+    object_id: int
+    cost_price_min: float | None = None
+    cost_price_max: float | None = None
+    selling_price_min: float | None = None
+    selling_price_max: float | None = None
+    currency: str | None = None
+    length_cm: float | None = None
+    width_cm: float | None = None
+    height_cm: float | None = None
+    volume_cm3: float | None = None
+    weight_value: float | None = None
+    weight_unit: str | None = None
+    source: str
+    status: str
+    reference_match_id: int | None = None
+    notes: str | None = None
+    is_active: bool
+    created_at: str | None = None
+    updated_at: str | None = None
 
