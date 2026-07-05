@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from apify_client import ApifyClient
+
+from app.core.apify_utils import apify_run_field
 from starlette.concurrency import run_in_threadpool
 
 from app.core.config import get_settings
@@ -312,7 +314,9 @@ def _fetch_tiktok_items(actor_input: dict[str, Any]) -> list[dict[str, Any]]:
 
     client = ApifyClient(token)
     run = client.actor(actor_id).call(run_input=actor_input)
-    dataset_id = run.get("defaultDatasetId")
+    dataset_id = apify_run_field(run, "defaultDatasetId", "default_dataset_id")
+    if not dataset_id:
+        raise RuntimeError("Apify run 缺少 defaultDatasetId")
     raw = list(client.dataset(dataset_id).iterate_items())
     first_keys: list[str] | None = None
     if raw and isinstance(raw[0], dict):
@@ -320,8 +324,8 @@ def _fetch_tiktok_items(actor_input: dict[str, Any]) -> list[dict[str, Any]]:
     logger.info(
         "TikTok Apify 抓取完成 actor_id=%s run_id=%s status=%s dataset_id=%s raw_count=%s first_item_keys=%s",
         actor_id,
-        run.get("id"),
-        run.get("status"),
+        apify_run_field(run, "id"),
+        apify_run_field(run, "status"),
         dataset_id,
         len(raw),
         first_keys,

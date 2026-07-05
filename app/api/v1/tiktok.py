@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
+from app.core.apify_utils import apify_run_field
 from app.core.config import get_settings
 from app.core.responses import success
 
@@ -394,7 +395,10 @@ def _fetch_tiktok_items(actor_input: dict[str, Any]) -> tuple[dict[str, Any], li
 
     client = ApifyClient(token)
     run = client.actor(actor_id).call(run_input=actor_input)
-    items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+    dataset_id = apify_run_field(run, "defaultDatasetId", "default_dataset_id")
+    if not dataset_id:
+        raise RuntimeError("Apify run 缺少 defaultDatasetId")
+    items = list(client.dataset(dataset_id).iterate_items())
     return run, items
 
 
@@ -428,9 +432,9 @@ async def _run_search_and_respond(
             "total_after_filter": len(filtered_items),
             "returned_count": len(limited_items),
             "actor_run": {
-                "id": run.get("id"),
-                "status": run.get("status"),
-                "defaultDatasetId": run.get("defaultDatasetId"),
+                "id": apify_run_field(run, "id"),
+                "status": apify_run_field(run, "status"),
+                "defaultDatasetId": apify_run_field(run, "defaultDatasetId", "default_dataset_id"),
             },
             "actor_input": actor_input,
             "filters": filters.model_dump(exclude_none=True),

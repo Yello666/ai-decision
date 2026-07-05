@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 
 from apify_client import ApifyClient
 
+from app.core.apify_utils import apify_run_field
+
 from . import config
 
 logger = logging.getLogger(__name__)
@@ -87,11 +89,16 @@ def fetch_latest_posts(profile: str, max_posts: int) -> list[InstagramPost]:
 
     client = ApifyClient(token)
     run = client.actor(config.APIFY_INSTAGRAM_ACTOR).call(run_input=actor_input)
-    dataset_id = run.get("defaultDatasetId")
+    dataset_id = apify_run_field(run, "defaultDatasetId", "default_dataset_id")
+    if not dataset_id:
+        raise RuntimeError("Apify run 缺少 defaultDatasetId")
     raw = list(client.dataset(dataset_id).iterate_items())
     logger.info(
         "Instagram Apify 抓取完成 account=%s run_id=%s status=%s raw_count=%d",
-        username, run.get("id"), run.get("status"), len(raw),
+        username,
+        apify_run_field(run, "id"),
+        apify_run_field(run, "status"),
+        len(raw),
     )
 
     posts: list[InstagramPost] = []
