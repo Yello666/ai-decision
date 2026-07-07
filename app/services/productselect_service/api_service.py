@@ -94,6 +94,35 @@ def _normalized_bbox(value: Any) -> list[float] | None:
     return [x1, y1, x2, y2]
 
 
+def _purge_local_if_uploaded(path: Path | str | None, *, oss_key: str | None) -> bool:
+    """OSS 已上传且线上模式时删除本地文件。"""
+    if not config.delete_local_after_oss_upload():
+        return False
+    if not oss_key:
+        return False
+    file_path = Path(path) if path else None
+    if file_path is None or not file_path.is_file():
+        return False
+    try:
+        file_path.unlink()
+        logger.info("已删除本地文件 path=%s", file_path)
+        return True
+    except Exception:
+        logger.exception("删除本地文件失败 path=%s", file_path)
+        return False
+
+
+def _finalize_image_local_ref(row, path: Path | str | None, *, oss_key: str | None) -> None:
+    """线上模式且 OSS 已有备份时，删除本地文件并清空 local_path。"""
+    if row is None:
+        return
+    effective_key = oss_key or getattr(row, "oss_key", None)
+    if _purge_local_if_uploaded(path, oss_key=effective_key):
+        row.local_path = None
+    elif config.delete_local_after_oss_upload() and effective_key:
+        row.local_path = None
+
+
 def _signed_url_from_image_row(row) -> str | None:
     """按 oss_key 签发前端/API 可访问 URL；原图可回退 Instagram source_url。"""
     if row is None:
@@ -129,6 +158,7 @@ def _ensure_image_on_oss(
         uploaded = upload_file(local_path, prefix=prefix, expire_seconds=config.OSS_SIGN_URL_EXPIRE)
         row.oss_key = uploaded.key
         row.oss_url = uploaded.url
+        _finalize_image_local_ref(row, local_path, oss_key=uploaded.key)
         db.commit()
         return uploaded.url
     except Exception:
@@ -217,7 +247,28 @@ def _attach_crop_image(
         height=height,
     )
     obj.crop_image_id = crop_row.id
+    _finalize_image_local_ref(crop_row, saved, oss_key=oss_key)
     db.commit()
+
+
+def _cleanup_post_local_files(
+    *,
+    images: list[tuple[Path, str]],
+    image_rows: dict[str, Any],
+    recognition_path: Path,
+    recognition_oss_key: str | None,
+) -> str | None:
+    """整条帖子处理完成后清理本地原图与识图 JSON，返回应写入 content.raw_path 的值。"""
+    for image_path, _ in images:
+        image_row = image_rows.get(image_path.name)
+        if image_row is None:
+            continue
+        _finalize_image_local_ref(image_row, image_path, oss_key=image_row.oss_key)
+
+    if recognition_oss_key and config.delete_local_after_oss_upload():
+        _purge_local_if_uploaded(recognition_path, oss_key=recognition_oss_key)
+        return None
+    return str(recognition_path)
 
 
 _VALID_WEIGHT_UNITS = frozenset({"g", "kg", "lb", "oz"})
@@ -650,7 +701,12 @@ def run_instagram_monitor(payload: InstagramRunRequest, db: Session) -> dict[str
                 _attach_crop_image(db, obj=object_row, source_image=source_image, bbox=bbox)
                 _attach_profile_from_recognition(db, object_row=object_row, obj=obj)
 
-            content.raw_path = str(recognition_path)
+            content.raw_path = _cleanup_post_local_files(
+                images=images,
+                image_rows=image_rows,
+                recognition_path=recognition_path,
+                recognition_oss_key=recognition_oss_key,
+            )
             content.status = "recognized"
             db.commit()
 
@@ -768,6 +824,7 @@ def refresh_object_matches(
                     height=height,
                 )
                 obj.crop_image_id = crop_row.id
+                _finalize_image_local_ref(crop_row, saved, oss_key=oss_key)
                 db.commit()
                 image_url = lens_url
 

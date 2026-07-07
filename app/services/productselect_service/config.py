@@ -157,6 +157,16 @@ def get_oss_config() -> dict[str, str | None]:
     }
 
 
+def delete_local_after_oss_upload() -> bool:
+    """线上模式（LOCAL_DEV=false）在上传 OSS 成功后删除本地文件。"""
+    try:
+        from app.core.config import get_settings
+
+        return not get_settings().LOCAL_DEV
+    except Exception:
+        return False
+
+
 # ------------------------------
 # 供应链对齐（裁剪 → OSS → SerpApi Google Lens）
 # ------------------------------
