@@ -81,7 +81,7 @@ class ProductMatchRefreshRequest(BaseModel):
     """对单个商品机会刷新商品匹配。"""
 
     lens_type: LensType = Field(default="products", description="Google Lens type 参数")
-    limit: int = Field(default=3, ge=1, le=20, description="返回前 N 个匹配")
+    limit: int = Field(default=4, ge=1, le=20, description="返回前 N 个匹配")
 
 
 class ProductMatchResponse(BaseModel):
@@ -178,6 +178,8 @@ class ObjectProfileOut(BaseModel):
     status: str
     reference_match_id: int | None = None
     notes: str | None = None
+    confidence_score: float | None = None
+    estimate_detail: dict[str, Any] | None = None
     is_active: bool
     created_at: str | None = None
     updated_at: str | None = None

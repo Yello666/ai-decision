@@ -30,7 +30,7 @@ from app.services.productselect_service.instagram_apify import (
     fetch_latest_posts,
 )
 from app.services.productselect_service.image_crop import crop_by_norm_box
-from app.services.productselect_service.lens_filter import build_top_matches
+from app.services.productselect_service.match_evaluator import evaluate_lens_matches
 from app.services.productselect_service.oss_uploader import sign_key, upload_bytes, upload_file
 from app.services.productselect_service.repository import (
     create_image,
@@ -410,6 +410,8 @@ def profile_to_dict(row) -> dict[str, Any]:
         "status": row.status,
         "reference_match_id": row.reference_match_id,
         "notes": row.notes,
+        "confidence_score": _decimal_to_float(row.confidence_score),
+        "estimate_detail": row.estimate_detail_json,
         "is_active": row.is_active,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
@@ -431,6 +433,9 @@ def object_to_dict(row) -> dict[str, Any]:
         "bbox": row.bbox_json,
         "recognition_version": row.recognition_version,
         "is_active": row.is_active,
+        "opportunity_score": _decimal_to_float(row.opportunity_score),
+        "opportunity_score_level": row.opportunity_score_level,
+        "opportunity_score_reason": row.opportunity_score_reason,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
@@ -450,6 +455,15 @@ def match_to_dict(row) -> dict[str, Any]:
         "reviews": row.reviews,
         "in_stock": row.in_stock,
         "thumbnail_url": row.thumbnail_url,
+        "selection_order": row.selection_order,
+        "selection_role": row.selection_role,
+        "selection_score": _decimal_to_float(row.selection_score),
+        "visual_similarity_score": _decimal_to_float(row.visual_similarity_score),
+        "keyword_similarity_score": _decimal_to_float(row.keyword_similarity_score),
+        "final_similarity_score": _decimal_to_float(row.final_similarity_score),
+        "similarity_level": row.similarity_level,
+        "is_reference_used": row.is_reference_used,
+        "selection_reason": row.selection_reason,
         "raw_json": row.raw_json,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
@@ -836,17 +850,46 @@ def refresh_object_matches(
         raise ValueError("object 缺少可用于商品匹配的图片")
 
     lens = search_by_image_url(image_url, lens_type=lens_type)
-    create_matches_from_lens(db, object_id=obj.id, lens_response=lens)
-    top_matches = build_top_matches(
-        lens,
-        category=obj.category,
-        related_ip=obj.related_ip,
-        attributes=obj.attributes_json if isinstance(obj.attributes_json, list) else None,
-        limit=limit,
+    match_rows = create_matches_from_lens(db, object_id=obj.id, lens_response=lens, commit=False)
+    evaluation = evaluate_lens_matches(
+        lens_response=lens,
+        object_image_url=image_url,
+        object_context={
+            "category": obj.category,
+            "related_ip": obj.related_ip,
+            "description": obj.description,
+            "attributes": obj.attributes_json if isinstance(obj.attributes_json, list) else [],
+            "reason": obj.reason,
+            "ecommerce_potential": obj.ecommerce_potential,
+        },
+        match_rows=match_rows,
     )
+    opportunity = evaluation.get("opportunity")
+    if isinstance(opportunity, dict):
+        # 商品机会评分是列表排序/人工决策字段，随每次相似商品刷新重算。
+        obj.opportunity_score = opportunity.get("score")
+        obj.opportunity_score_level = opportunity.get("level")
+        obj.opportunity_score_reason = opportunity.get("reason")
+    profile_row = None
+    profile_kwargs = evaluation.get("profile")
+    if isinstance(profile_kwargs, dict):
+        reference_match_id = profile_kwargs.pop("reference_match_id", None)
+        profile_row = create_object_profile(
+            db,
+            object_id=obj.id,
+            reference_match_id=reference_match_id,
+            deactivate_existing=True,
+            commit=False,
+            **profile_kwargs,
+        )
+    db.commit()
+    for row in match_rows:
+        db.refresh(row)
+    if profile_row is not None:
+        db.refresh(profile_row)
     return {
         "object": object_detail_to_dict(db, obj),
-        "top_matches": top_matches,
+        "top_matches": evaluation["top_matches"],
         "matched_count": len(lens.get("visual_matches") or []),
         "from_cache": False,
     }
@@ -889,11 +932,25 @@ def query_matches(
     source: str | None,
     limit: int,
 ) -> dict[str, Any]:
-    rows = list_matches(db, object_id=object_id, source=source, limit=limit)
+    rows = list_matches(db, object_id=object_id, source=source, limit=500)
+    rows.sort(key=_match_display_sort_key)
+    rows = rows[: max(limit, 1)]
     return {
         "items": [match_to_dict(row) for row in rows],
         "returned_count": len(rows),
     }
+
+
+def _match_display_sort_key(row) -> tuple[int, int, int]:
+    raw = row.raw_json if isinstance(row.raw_json, dict) else {}
+    evaluation = raw.get("evaluation") if isinstance(raw.get("evaluation"), dict) else {}
+    selection_order = row.selection_order or evaluation.get("selection_order")
+    try:
+        order = int(selection_order)
+    except (TypeError, ValueError):
+        order = 9999
+    priority = 0 if order < 9999 else 1
+    return priority, order, row.id
 
 
 def _validate_profile_reference(db: Session, object_id: int, reference_match_id: int | None) -> None:

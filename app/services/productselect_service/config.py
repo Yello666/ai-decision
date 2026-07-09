@@ -168,12 +168,10 @@ def delete_local_after_oss_upload() -> bool:
 
 
 # ------------------------------
-# 供应链对齐（裁剪 → OSS → SerpApi Google Lens）
+# 商品匹配（裁剪 → OSS → SerpApi Google Lens）
 # ------------------------------
 # 裁剪图本地输出目录
 CROP_OUTPUT_DIR = PRODUCT_SELECT_DIR / "crops"
-# 供应链测试结果输出目录
-SUPPLY_TEST_DIR = PRODUCT_SELECT_DIR / "supply_test"
 
 # 裁剪时在 bbox 四周留的边距比例（0~0.2），稍微留点边识别更稳
 CROP_PADDING_RATIO = 0.04
@@ -194,13 +192,3 @@ OSS_API_SIGN_URL_EXPIRE = 21600  # API 返回给前端的签名有效期（6 小
 # type: all（最全，含 visual_matches + related_content）| products | visual_matches | exact_matches
 SERPAPI_LENS_TYPE = "products"
 SERPAPI_LENS_COUNTRY = "us"
-
-# 只对这些潜力等级的物件调用 SerpApi（控制搜索次数与成本）。
-# 例：["high"] 只查高潜力；["high","medium"] 查高+中；置为 [] 或 None 表示不过滤、全部查。
-SUPPLY_POTENTIAL_FILTER: list[str] | None = ["high"]
-
-# 供应链测试入口要处理的图片（相对项目根或绝对路径）
-SUPPLY_TEST_IMAGES: list[str] = [
-    "productSelect/instagram_pic/cristiano/3926051279432646990/3926051279432646990_01.jpg",
-    "productSelect/instagram_pic/csgoniko/3920104545275358222/3920104545275358222_01.jpg",
-]

@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # -------- 本地开发开关 --------
     # True  → 使用本地配置
     # False → 使用.env线上配置
-    LOCAL_DEV: bool = False
+    LOCAL_DEV: bool = True
     
 
     # 基础项目配置

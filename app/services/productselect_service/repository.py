@@ -538,6 +538,8 @@ def create_object_profile(
     status: str = "draft",
     reference_match_id: int | None = None,
     notes: str | None = None,
+    confidence_score: float | Decimal | None = None,
+    estimate_detail_json: dict[str, Any] | None = None,
     is_active: bool = True,
     deactivate_existing: bool = True,
     commit: bool = True,
@@ -561,6 +563,8 @@ def create_object_profile(
         status=(status or "draft").strip().lower(),
         reference_match_id=reference_match_id,
         notes=notes,
+        confidence_score=_price_to_decimal(confidence_score),
+        estimate_detail_json=estimate_detail_json,
         is_active=is_active,
     )
     db.add(row)
@@ -586,6 +590,8 @@ def update_object_profile(
     status: str | None = None,
     reference_match_id: int | None = None,
     notes: str | None = None,
+    confidence_score: float | Decimal | None = None,
+    estimate_detail_json: dict[str, Any] | None = None,
     is_active: bool | None = None,
     commit: bool = True,
 ) -> ProductSelectObjectProfile | None:
@@ -609,6 +615,8 @@ def update_object_profile(
         "status": status,
         "reference_match_id": reference_match_id,
         "notes": notes,
+        "confidence_score": confidence_score,
+        "estimate_detail_json": estimate_detail_json,
         "is_active": is_active,
     }
     for field, value in updates.items():
@@ -624,6 +632,7 @@ def update_object_profile(
             "height_cm",
             "volume_cm3",
             "weight_value",
+            "confidence_score",
         }:
             setattr(row, field, _price_to_decimal(value))
         elif field == "currency":

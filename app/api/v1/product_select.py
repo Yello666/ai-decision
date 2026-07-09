@@ -127,7 +127,7 @@ def delete_object(
 def get_object_matches(
     object_id: int,
     source: str | None = Query(default=None, description="google_lens/amazon/taobao/1688 等"),
-    limit: int = Query(default=3, ge=1, le=500),
+    limit: int = Query(default=4, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
     data = api_service.query_matches(db, object_id=object_id, source=source, limit=limit)
