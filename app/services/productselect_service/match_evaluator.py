@@ -43,7 +43,8 @@ _EVALUATION_PROMPT = """你是电商选品的相似商品审核员。
 6. 尺寸/重量如果候选信息不足，可以结合品类和视觉估计，无法判断则填 null。
 7. 成本价不是零售价，若只能从零售价反推，请给保守区间并在 notes 说明。
 
-严格输出 JSON，不要 markdown，不要解释。结构：
+严格输出 JSON，不要 markdown，不要解释。所有 similarity_score 必须返回 0～100 的整数或小数，例如 85；
+不要返回 0.85、0.8 等 0～1 的比例值。结构：
 {
   "matches": [
     {
@@ -437,10 +438,14 @@ def _fallback_evaluation(candidates: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _normal_score(value: Any) -> float | None:
+    """统一模型可能返回的 0～1 比例分数与 0～100 百分制分数。"""
     try:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
+    # 兼容模型未遵守提示词、将 80% 写成 0.8 的情况。
+    if 0 < parsed <= 1:
+        parsed *= 100
     return max(0.0, min(100.0, parsed))
 
 
@@ -638,13 +643,22 @@ def _opportunity_score(
     avg_reference = sum(reference_scores) / len(reference_scores) if reference_scores else 35.0
     confidence = _float_or_none((profile or {}).get("confidence_score")) or 35.0
     amazon_bonus = 5.0 if any(item.get("is_reference_used") and item.get("is_amazon") for item in evaluations) else 0.0
-    score = potential_base * 0.30 + best_similarity * 0.30 + avg_reference * 0.22 + confidence * 0.15 + amazon_bonus
+    potential_part = potential_base * 0.30
+    best_similarity_part = best_similarity * 0.30
+    reference_part = avg_reference * 0.22
+    confidence_part = confidence * 0.15
+    score = potential_part + best_similarity_part + reference_part + confidence_part + amazon_bonus
     score = round(max(0.0, min(100.0, score)), 2)
     level = "high" if score >= 75 else "medium" if score >= 55 else "low"
+    # 保留逐项计算过程，供前端评分说明 Tooltip 直接展示。
     reason = (
-        f"识图潜力基础分 {potential_base:.0f}；最高相似度 {best_similarity:.0f}；"
-        f"采用 {len(reference_scores)} 个参考商品；预估可信度 {confidence:.0f}"
-        f"{'；包含 Amazon 参考' if amazon_bonus else ''}。"
+        f"识图潜力基础分：{potential_base:.0f} × 30% = {potential_part:.2f}\n"
+        f"最高相似度：{best_similarity:.2f} × 30% = {best_similarity_part:.2f}\n"
+        f"参考商品平均相似度：{avg_reference:.2f} × 22% = {reference_part:.2f}"
+        f"（采用 {len(reference_scores)} 个）\n"
+        f"预估可信度：{confidence:.2f} × 15% = {confidence_part:.2f}\n"
+        f"Amazon 参考加分：{amazon_bonus:.2f}\n"
+        f"最终评分：{score:.2f}（{level}）"
     )
     return {
         "score": score,
