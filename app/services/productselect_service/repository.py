@@ -322,6 +322,56 @@ def deactivate_objects_for_content(
     return count
 
 
+def count_active_objects_for_content(db: Session, content_id: int) -> int:
+    return (
+        db.query(ProductSelectObject)
+        .filter(
+            ProductSelectObject.content_id == content_id,
+            ProductSelectObject.is_active.is_(True),
+        )
+        .count()
+    )
+
+
+def reactivate_latest_remaining_version(
+    db: Session,
+    content_id: int,
+    *,
+    commit: bool = True,
+) -> int | None:
+    """若 content 下已无 is_active 行，将剩余记录中最大 recognition_version 整批重新激活。
+
+    返回被激活的版本号；若无可回退版本则返回 None。
+    """
+    if count_active_objects_for_content(db, content_id) > 0:
+        return None
+
+    max_version = (
+        db.query(ProductSelectObject.recognition_version)
+        .filter(ProductSelectObject.content_id == content_id)
+        .order_by(ProductSelectObject.recognition_version.desc())
+        .limit(1)
+        .scalar()
+    )
+    if max_version is None:
+        return None
+
+    version = int(max_version)
+    (
+        db.query(ProductSelectObject)
+        .filter(
+            ProductSelectObject.content_id == content_id,
+            ProductSelectObject.recognition_version == version,
+        )
+        .update({ProductSelectObject.is_active: True}, synchronize_session=False)
+    )
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+    return version
+
+
 def create_match(
     db: Session,
     *,

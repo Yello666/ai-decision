@@ -49,6 +49,7 @@ from app.services.productselect_service.repository import (
     list_monitors,
     list_objects,
     next_object_version_for_content,
+    reactivate_latest_remaining_version,
     update_monitor,
     update_object_profile,
     upsert_content,
@@ -779,9 +780,25 @@ def delete_object_by_id(db: Session, object_id: int) -> dict[str, Any] | None:
     obj = get_object(db, object_id)
     if obj is None:
         return None
+
+    content_id = obj.content_id
+    was_active = bool(obj.is_active)
     data = object_detail_to_dict(db, obj)
     delete_matches_for_object(db, object_id, commit=False)
     db.delete(obj)
+    db.flush()
+
+    # 删光当前版本后，将仍存在的最大历史版本整批设为最新，避免中间留下空版本洞。
+    if content_id is not None and was_active:
+        promoted = reactivate_latest_remaining_version(db, content_id, commit=False)
+        if promoted is not None:
+            logger.info(
+                "object %s deleted; content %s promoted recognition_version=%s",
+                object_id,
+                content_id,
+                promoted,
+            )
+
     db.commit()
     return data
 
